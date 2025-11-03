@@ -1,0 +1,20 @@
+name: MasterBrewing
+version: 1.0.0
+main: com.supafloof.masterbrewing.MasterBrewing
+api-version: 1.20
+author: SupaFloof Games, LLC
+description: Master Brewing Stands with unlimited potion upgrades
+
+commands:
+  masterbrewing:
+    description: Master Brewing command
+    usage: /masterbrewing <help|give|reload>
+    aliases: [mb, mbrew]
+
+permissions:
+  masterbrewing.give:
+    description: Allows giving Master Brewing Stands
+    default: op
+  masterbrewing.admin:
+    description: Allows reloading configuration
+    default: op

@@ -1,0 +1,33 @@
+# MasterBrewing Configuration
+# 
+# upgrade-time: Controls duration upgrades using redstone
+# Format: level,redstone-cost,duration-seconds
+# - level: The upgrade tier (1, 2, 3, etc.)
+# - redstone-cost: Number of redstone required (max 64)
+# - duration-seconds: Potion duration in seconds
+# The highest level number becomes the maximum time level
+#
+# upgrade-power: Controls power/amplifier upgrades using glowstone
+# Format: level,glowstone-cost
+# - level: The upgrade tier (1, 2, 3, etc.)
+# - glowstone-cost: Number of glowstone dust required (max 64)
+# The highest level number becomes the maximum power level
+#
+# Example: A Speed I potion brewed with 1 glowstone becomes Speed II (power level 1)
+#          Then brewed with 1 redstone becomes Speed II with 360s duration (time level 1)
+#          Then brewed with 4 glowstone becomes Speed III with 360s duration (power level 2)
+#          Then brewed with 4 redstone becomes Speed III with 720s duration (time level 2)
+
+upgrade-time:
+  - "1,1,360"       # Level 1: 1 redstone = 6 minutes
+  - "2,4,720"       # Level 2: 4 redstone = 12 minutes
+  - "3,16,1080"     # Level 3: 16 redstone = 18 minutes
+  - "4,32,1440"     # Level 4: 32 redstone = 24 minutes
+  - "5,64,1800"     # Level 5: 64 redstone = 30 minutes
+
+upgrade-power:
+  - "1,1"           # Level 1: 1 glowstone = Power II
+  - "2,4"           # Level 2: 4 glowstone = Power III
+  - "3,16"          # Level 3: 16 glowstone = Power IV
+  - "4,32"          # Level 4: 32 glowstone = Power V
+  - "5,64"          # Level 5: 64 glowstone = Power VI

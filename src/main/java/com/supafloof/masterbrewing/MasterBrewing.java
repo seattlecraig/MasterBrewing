@@ -572,9 +572,21 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             int currentTimeLevel = meta.getPersistentDataContainer().getOrDefault(potionTimeLevelKey, PersistentDataType.INTEGER, 0);
             int currentPowerLevel = meta.getPersistentDataContainer().getOrDefault(potionPowerLevelKey, PersistentDataType.INTEGER, 0);
             
-            // Get base potion effect type
-            PotionEffectType effectType = getBasePotionEffect(potion);
-            if (effectType == null) continue;
+            // Get effect type key from NBT (handles both normal and fly potions)
+            String effectTypeKey = meta.getPersistentDataContainer().get(potionEffectTypeKey, PersistentDataType.STRING);
+            if (effectTypeKey == null) {
+                // Not a master potion, try to get base effect
+                PotionEffectType effectType = getBasePotionEffect(potion);
+                if (effectType == null) continue;
+                effectTypeKey = effectType.getKey().getKey();
+            }
+            
+            // Get PotionEffectType (null for fly)
+            PotionEffectType effectType = null;
+            if (!effectTypeKey.equals("fly")) {
+                effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectTypeKey));
+                if (effectType == null) continue;
+            }
             
             if (isRedstone) {
                 // Upgrade time
@@ -598,7 +610,7 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 ingredient.setAmount(ingredient.getAmount() - redstoneCost);
                 
                 // Apply upgrade
-                applyTimeUpgrade(potion, effectType, currentPowerLevel, nextLevel, duration);
+                applyTimeUpgrade(potion, effectTypeKey, effectType, currentPowerLevel, nextLevel, duration);
                 
             } else if (isGlowstone) {
                 // Upgrade power
@@ -619,7 +631,7 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 ingredient.setAmount(ingredient.getAmount() - glowstoneCost);
                 
                 // Apply upgrade
-                applyPowerUpgrade(potion, effectType, currentTimeLevel, nextLevel);
+                applyPowerUpgrade(potion, effectTypeKey, effectType, currentTimeLevel, nextLevel);
             }
         }
         
@@ -630,35 +642,46 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     /**
      * Applies time upgrade to a potion
      */
-    private void applyTimeUpgrade(ItemStack potion, PotionEffectType effectType, int currentPowerLevel, int newTimeLevel, int duration) {
+    /**
+     * Applies time upgrade to a potion
+     */
+    private void applyTimeUpgrade(ItemStack potion, String effectTypeKey, PotionEffectType effectType, int currentPowerLevel, int newTimeLevel, int duration) {
         if (!(potion.getItemMeta() instanceof PotionMeta)) return;
         
         PotionMeta meta = (PotionMeta) potion.getItemMeta();
         
         // If this is the first time upgrade and no duration was stored, preserve vanilla duration first
         if (!meta.getPersistentDataContainer().has(potionDurationKey, PersistentDataType.INTEGER)) {
-            int vanillaDuration = extractVanillaPotionDuration(meta, effectType);
-            meta.getPersistentDataContainer().set(potionDurationKey, PersistentDataType.INTEGER, vanillaDuration);
+            if (!effectTypeKey.equals("fly") && effectType != null) {
+                int vanillaDuration = extractVanillaPotionDuration(meta, effectType);
+                meta.getPersistentDataContainer().set(potionDurationKey, PersistentDataType.INTEGER, vanillaDuration);
+            }
         }
         
         // Store time level
         meta.getPersistentDataContainer().set(potionTimeLevelKey, PersistentDataType.INTEGER, newTimeLevel);
         meta.getPersistentDataContainer().set(potionDurationKey, PersistentDataType.INTEGER, duration);
-        meta.getPersistentDataContainer().set(potionEffectTypeKey, PersistentDataType.STRING, effectType.getKey().getKey());
+        meta.getPersistentDataContainer().set(potionEffectTypeKey, PersistentDataType.STRING, effectTypeKey);
         meta.getPersistentDataContainer().set(masterPotionKey, PersistentDataType.BYTE, (byte) 1);
         
         // Clear base potion type to remove vanilla text
         meta.setBasePotionType(PotionType.WATER);
         
         // Set the correct color for this effect type
-        meta.setColor(getPotionColor(effectType));
+        if (effectTypeKey.equals("fly")) {
+            meta.setColor(org.bukkit.Color.ORANGE);
+        } else {
+            meta.setColor(getPotionColor(effectType));
+        }
         
-        // Add custom effect - this displays the correct vanilla effect information
+        // Add custom effect - this displays the correct vanilla effect information (skip for fly)
         meta.clearCustomEffects();
-        meta.addCustomEffect(new PotionEffect(effectType, duration * 20, currentPowerLevel, false, false, false), true);
+        if (!effectTypeKey.equals("fly") && effectType != null) {
+            meta.addCustomEffect(new PotionEffect(effectType, duration * 20, currentPowerLevel, false, false, false), true);
+        }
         
         // Update display name
-        String effectName = formatEffectName(effectType);
+        String effectName = effectTypeKey.equals("fly") ? "Fly" : formatEffectName(effectType);
         int displayLevel = currentPowerLevel + 1; // Power level 0 = I, 1 = II, etc.
         String romanLevel = toRoman(displayLevel);
         
@@ -666,10 +689,24 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             .decoration(TextDecoration.ITALIC, true);
         meta.displayName(name);
         
-        // Update lore - just master potion identifier
+        // Update lore
         List<Component> lore = new ArrayList<>();
         lore.add(Component.text("Master Potion", NamedTextColor.LIGHT_PURPLE)
             .decoration(TextDecoration.ITALIC, false));
+        
+        // Add fly-specific lore
+        if (effectTypeKey.equals("fly")) {
+            // Calculate flight speed
+            float flightSpeed = 0.1f * (1.0f + (currentPowerLevel * 0.2f));
+            flightSpeed = Math.min(flightSpeed, 1.0f);
+            int speedPercent = (int)((flightSpeed / 0.1f) * 100);
+            
+            lore.add(Component.text("Flight Speed: " + speedPercent + "%", NamedTextColor.AQUA)
+                .decoration(TextDecoration.ITALIC, false));
+            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
+                .decoration(TextDecoration.ITALIC, false));
+        }
+        
         meta.lore(lore);
         
         potion.setItemMeta(meta);
@@ -678,14 +715,14 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     /**
      * Applies power upgrade to a potion
      */
-    private void applyPowerUpgrade(ItemStack potion, PotionEffectType effectType, int currentTimeLevel, int newPowerLevel) {
+    private void applyPowerUpgrade(ItemStack potion, String effectTypeKey, PotionEffectType effectType, int currentTimeLevel, int newPowerLevel) {
         if (!(potion.getItemMeta() instanceof PotionMeta)) return;
         
         PotionMeta meta = (PotionMeta) potion.getItemMeta();
         
         // Store power level
         meta.getPersistentDataContainer().set(potionPowerLevelKey, PersistentDataType.INTEGER, newPowerLevel);
-        meta.getPersistentDataContainer().set(potionEffectTypeKey, PersistentDataType.STRING, effectType.getKey().getKey());
+        meta.getPersistentDataContainer().set(potionEffectTypeKey, PersistentDataType.STRING, effectTypeKey);
         meta.getPersistentDataContainer().set(masterPotionKey, PersistentDataType.BYTE, (byte) 1);
         
         // Get duration - preserve vanilla duration if no time upgrades applied yet
@@ -701,8 +738,13 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             if (meta.getPersistentDataContainer().has(potionDurationKey, PersistentDataType.INTEGER)) {
                 duration = meta.getPersistentDataContainer().get(potionDurationKey, PersistentDataType.INTEGER);
             } else {
-                // Extract vanilla potion duration before we clear it
-                duration = extractVanillaPotionDuration(meta, effectType);
+                // For fly at level 0, use 180 seconds
+                if (effectTypeKey.equals("fly")) {
+                    duration = 180;
+                } else if (effectType != null) {
+                    // Extract vanilla potion duration before we clear it
+                    duration = extractVanillaPotionDuration(meta, effectType);
+                }
             }
         }
         
@@ -713,14 +755,20 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         meta.setBasePotionType(PotionType.WATER);
         
         // Set the correct color for this effect type
-        meta.setColor(getPotionColor(effectType));
+        if (effectTypeKey.equals("fly")) {
+            meta.setColor(org.bukkit.Color.ORANGE);
+        } else {
+            meta.setColor(getPotionColor(effectType));
+        }
         
-        // Add custom effect - this displays the correct vanilla effect information
+        // Add custom effect - this displays the correct vanilla effect information (skip for fly)
         meta.clearCustomEffects();
-        meta.addCustomEffect(new PotionEffect(effectType, duration * 20, newPowerLevel, false, false, false), true);
+        if (!effectTypeKey.equals("fly") && effectType != null) {
+            meta.addCustomEffect(new PotionEffect(effectType, duration * 20, newPowerLevel, false, false, false), true);
+        }
         
         // Update display name
-        String effectName = formatEffectName(effectType);
+        String effectName = effectTypeKey.equals("fly") ? "Fly" : formatEffectName(effectType);
         int displayLevel = newPowerLevel + 1; // Power level 0 = I, 1 = II, etc.
         String romanLevel = toRoman(displayLevel);
         
@@ -728,10 +776,24 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             .decoration(TextDecoration.ITALIC, true);
         meta.displayName(name);
         
-        // Update lore - just master potion identifier
+        // Update lore
         List<Component> lore = new ArrayList<>();
         lore.add(Component.text("Master Potion", NamedTextColor.LIGHT_PURPLE)
             .decoration(TextDecoration.ITALIC, false));
+        
+        // Add fly-specific lore
+        if (effectTypeKey.equals("fly")) {
+            // Calculate flight speed
+            float flightSpeed = 0.1f * (1.0f + (newPowerLevel * 0.2f));
+            flightSpeed = Math.min(flightSpeed, 1.0f);
+            int speedPercent = (int)((flightSpeed / 0.1f) * 100);
+            
+            lore.add(Component.text("Flight Speed: " + speedPercent + "%", NamedTextColor.AQUA)
+                .decoration(TextDecoration.ITALIC, false));
+            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
+                .decoration(TextDecoration.ITALIC, false));
+        }
+        
         meta.lore(lore);
         
         potion.setItemMeta(meta);
@@ -1231,8 +1293,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         if (sender.hasPermission("masterbrewing.give")) {
             sender.sendMessage(Component.text("/masterbrewing give stand <player>", NamedTextColor.YELLOW)
                 .append(Component.text(" - Give a Master Brewing Stand", NamedTextColor.GRAY)));
-            sender.sendMessage(Component.text("/masterbrewing give potion <player> <potion> <time_lvl> <power_lvl>", NamedTextColor.YELLOW)
-                .append(Component.text(" - Give a Master Potion", NamedTextColor.GRAY)));
+            sender.sendMessage(Component.text("/masterbrewing give potion <player> <potion> [time_lvl] [power_lvl]", NamedTextColor.YELLOW)
+                .append(Component.text(" - Give a Master Potion (defaults: 1,1 or 0,0 for fly)", NamedTextColor.GRAY)));
             sender.sendMessage(Component.text("/masterbrewing give potion <player> <potion> max", NamedTextColor.YELLOW)
                 .append(Component.text(" - Give max level potion", NamedTextColor.GRAY)));
             sender.sendMessage(Component.text("/masterbrewing give potion <player> random", NamedTextColor.YELLOW)
@@ -1242,6 +1304,56 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         if (sender.hasPermission("masterbrewing.admin")) {
             sender.sendMessage(Component.text("/masterbrewing reload", NamedTextColor.YELLOW)
                 .append(Component.text(" - Reload configuration", NamedTextColor.GRAY)));
+        }
+        
+        // Display upgrade tables
+        sender.sendMessage(Component.text(""));
+        sender.sendMessage(Component.text("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", NamedTextColor.GOLD));
+        sender.sendMessage(Component.text("Time Upgrades (Redstone)", NamedTextColor.GOLD, TextDecoration.BOLD));
+        sender.sendMessage(Component.text("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", NamedTextColor.GOLD));
+        sender.sendMessage(Component.text(" Level │ Redstone │ Duration", NamedTextColor.WHITE, TextDecoration.BOLD));
+        sender.sendMessage(Component.text("───────┼──────────┼──────────", NamedTextColor.DARK_GRAY));
+        
+        for (int level : timeUpgrades.keySet()) {
+            int[] upgrade = timeUpgrades.get(level);
+            int redstoneCost = upgrade[0];
+            int duration = upgrade[1];
+            String durationStr = formatDuration(duration);
+            
+            // Format with proper spacing: Level (right-aligned 5), Redstone (right-aligned 8), Duration (left-aligned 8)
+            String levelStr = String.format("%5d", level);
+            String redstoneStr = String.format("%8d", redstoneCost);
+            String durationDisplay = String.format("%-8s", durationStr);
+            
+            sender.sendMessage(Component.text(levelStr, NamedTextColor.YELLOW)
+                .append(Component.text(" │ ", NamedTextColor.DARK_GRAY))
+                .append(Component.text(redstoneStr, NamedTextColor.RED))
+                .append(Component.text(" │ ", NamedTextColor.DARK_GRAY))
+                .append(Component.text(durationDisplay, NamedTextColor.AQUA)));
+        }
+        
+        sender.sendMessage(Component.text(""));
+        sender.sendMessage(Component.text("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", NamedTextColor.GOLD));
+        sender.sendMessage(Component.text("Power Upgrades (Glowstone)", NamedTextColor.GOLD, TextDecoration.BOLD));
+        sender.sendMessage(Component.text("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", NamedTextColor.GOLD));
+        sender.sendMessage(Component.text(" Level │ Glowstone │ Potion Level", NamedTextColor.WHITE, TextDecoration.BOLD));
+        sender.sendMessage(Component.text("───────┼───────────┼──────────────", NamedTextColor.DARK_GRAY));
+        
+        for (int level : powerUpgrades.keySet()) {
+            int glowstoneCost = powerUpgrades.get(level);
+            int displayLevel = level + 1; // Power level 1 = II, 2 = III, etc.
+            String romanLevel = toRoman(displayLevel);
+            
+            // Format with proper spacing: Level (right-aligned 5), Glowstone (right-aligned 9), Potion Level (left-aligned 12)
+            String levelStr = String.format("%5d", level);
+            String glowstoneStr = String.format("%9d", glowstoneCost);
+            String potionLevelDisplay = String.format("%-12s", romanLevel);
+            
+            sender.sendMessage(Component.text(levelStr, NamedTextColor.YELLOW)
+                .append(Component.text(" │ ", NamedTextColor.DARK_GRAY))
+                .append(Component.text(glowstoneStr, NamedTextColor.GOLD))
+                .append(Component.text(" │ ", NamedTextColor.DARK_GRAY))
+                .append(Component.text(potionLevelDisplay, NamedTextColor.LIGHT_PURPLE)));
         }
         
         sender.sendMessage(Component.text("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", NamedTextColor.GOLD));
@@ -1258,7 +1370,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         
         if (args.length < 3) {
             sender.sendMessage(Component.text("Usage: /masterbrewing give stand <player>", NamedTextColor.RED));
-            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> <time_lvl> <power_lvl>", NamedTextColor.RED));
+            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> [time_lvl] [power_lvl]", NamedTextColor.RED));
+            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> random", NamedTextColor.RED));
             return true;
         }
         
@@ -1270,7 +1383,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             return handleGivePotion(sender, args);
         } else {
             sender.sendMessage(Component.text("Usage: /masterbrewing give stand <player>", NamedTextColor.RED));
-            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> <time_lvl> <power_lvl>", NamedTextColor.RED));
+            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> [time_lvl] [power_lvl]", NamedTextColor.RED));
+            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> random", NamedTextColor.RED));
             return true;
         }
     }
@@ -1304,7 +1418,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
      */
     private boolean handleGivePotion(CommandSender sender, String[] args) {
         if (args.length < 4) {
-            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> <time_lvl> <power_lvl>", NamedTextColor.RED));
+            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> [time_lvl] [power_lvl]", NamedTextColor.RED)
+                .append(Component.text(" - defaults: 1,1 (or 0,0 for fly)", NamedTextColor.GRAY)));
             sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> random", NamedTextColor.RED));
             sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> max", NamedTextColor.RED));
             return true;
@@ -1323,14 +1438,23 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             return handleGiveRandomPotion(sender, target);
         }
         
-        // Check for "max" variant
+        // Determine time and power levels
         boolean isMaxVariant = false;
-        if (args.length == 5 && args[4].equalsIgnoreCase("max")) {
+        boolean useDefaults = false;
+        
+        if (args.length == 4) {
+            // No levels specified, use defaults (1,1 or 0,0 for fly)
+            useDefaults = true;
+        } else if (args.length == 5 && args[4].equalsIgnoreCase("max")) {
+            // Max variant
             isMaxVariant = true;
         } else if (args.length < 6) {
+            // Invalid - need either nothing (defaults), "max", or both levels
+            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion>", NamedTextColor.RED)
+                .append(Component.text(" - defaults: 1,1 (or 0,0 for fly)", NamedTextColor.GRAY)));
             sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> <time_lvl> <power_lvl>", NamedTextColor.RED));
-            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> random", NamedTextColor.RED));
             sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> max", NamedTextColor.RED));
+            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> random", NamedTextColor.RED));
             return true;
         }
         
@@ -1462,7 +1586,16 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         int timeLevel;
         int powerLevel;
         
-        if (isMaxVariant) {
+        if (useDefaults) {
+            // Special case: fly defaults to 0,0 (base speed, 3 min duration)
+            if (potionName.equals("fly")) {
+                timeLevel = 0;
+                powerLevel = 0;
+            } else {
+                timeLevel = 1;
+                powerLevel = 1;
+            }
+        } else if (isMaxVariant) {
             timeLevel = maxTimeLevel;
             powerLevel = maxPowerLevel;
         } else {
@@ -1475,7 +1608,9 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             }
         }
         
-        if (timeLevel < 1 || powerLevel < 1) {
+        // Validate levels (allow 0 for fly potion)
+        boolean isFlyWithZeroLevels = potionName.equals("fly") && (timeLevel == 0 || powerLevel == 0);
+        if (!isFlyWithZeroLevels && (timeLevel < 1 || powerLevel < 1)) {
             sender.sendMessage(Component.text("Levels must be 1 or greater!", NamedTextColor.RED));
             return true;
         }
@@ -1491,16 +1626,24 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         }
         
         // Get duration from config for the specified time level
-        if (!timeUpgrades.containsKey(timeLevel)) {
-            sender.sendMessage(Component.text("Invalid time level: " + timeLevel + "! Valid levels are 1-" + maxTimeLevel, NamedTextColor.RED));
-            return true;
+        int duration;
+        if (potionName.equals("fly") && timeLevel == 0) {
+            // Fly potion at level 0 has 3 minute (180 second) duration
+            duration = 180;
+        } else {
+            if (!timeUpgrades.containsKey(timeLevel)) {
+                sender.sendMessage(Component.text("Invalid time level: " + timeLevel + "! Valid levels are 1-" + maxTimeLevel, NamedTextColor.RED));
+                return true;
+            }
+            duration = timeUpgrades.get(timeLevel)[1];
         }
-        int duration = timeUpgrades.get(timeLevel)[1];
         
-        // Validate power level exists in config
-        if (!powerUpgrades.containsKey(powerLevel)) {
-            sender.sendMessage(Component.text("Invalid power level: " + powerLevel + "! Valid levels are 1-" + maxPowerLevel, NamedTextColor.RED));
-            return true;
+        // Validate power level exists in config (skip for fly at level 0)
+        if (!(potionName.equals("fly") && powerLevel == 0)) {
+            if (!powerUpgrades.containsKey(powerLevel)) {
+                sender.sendMessage(Component.text("Invalid power level: " + powerLevel + "! Valid levels are 1-" + maxPowerLevel, NamedTextColor.RED));
+                return true;
+            }
         }
         
         // Create the master potion
@@ -1543,6 +1686,20 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         List<Component> lore = new ArrayList<>();
         lore.add(Component.text("Master Potion", NamedTextColor.LIGHT_PURPLE)
             .decoration(TextDecoration.ITALIC, false));
+        
+        // Add fly-specific lore
+        if (effectKey.equals("fly")) {
+            // Calculate flight speed
+            float flightSpeed = 0.1f * (1.0f + (powerLevel * 0.2f));
+            flightSpeed = Math.min(flightSpeed, 1.0f);
+            int speedPercent = (int)((flightSpeed / 0.1f) * 100);
+            
+            lore.add(Component.text("Flight Speed: " + speedPercent + "%", NamedTextColor.AQUA)
+                .decoration(TextDecoration.ITALIC, false));
+            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
+                .decoration(TextDecoration.ITALIC, false));
+        }
+        
         meta.lore(lore);
         
         potion.setItemMeta(meta);
@@ -1674,6 +1831,20 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         List<Component> lore = new ArrayList<>();
         lore.add(Component.text("Master Potion", NamedTextColor.LIGHT_PURPLE)
             .decoration(TextDecoration.ITALIC, false));
+        
+        // Add fly-specific lore
+        if (effectKey.equals("fly")) {
+            // Calculate flight speed
+            float flightSpeed = 0.1f * (1.0f + (powerLevel * 0.2f));
+            flightSpeed = Math.min(flightSpeed, 1.0f);
+            int speedPercent = (int)((flightSpeed / 0.1f) * 100);
+            
+            lore.add(Component.text("Flight Speed: " + speedPercent + "%", NamedTextColor.AQUA)
+                .decoration(TextDecoration.ITALIC, false));
+            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
+                .decoration(TextDecoration.ITALIC, false));
+        }
+        
         meta.lore(lore);
         
         potion.setItemMeta(meta);

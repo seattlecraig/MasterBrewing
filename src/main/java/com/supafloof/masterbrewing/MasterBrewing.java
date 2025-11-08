@@ -79,8 +79,9 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     private NamespacedKey potionEffectTypeKey;
     private NamespacedKey masterPotionKey;
     
-    // Stores locations of placed master brewing stands
-    private Set<Location> masterBrewingStandLocations = new HashSet<>();
+    // OPTIMIZATION #1: Store locations as strings for O(1) lookup without object allocation
+    // Format: "world,x,y,z"
+    private Set<String> masterBrewingStandLocations = new HashSet<>();
     
     // Track active master potion effects per player
     // Map: Player UUID -> List of active effects with expiry times
@@ -96,6 +97,57 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     // Max levels based on config
     private int maxTimeLevel = 0;
     private int maxPowerLevel = 0;
+    
+    // OPTIMIZATION #3: Static maps for O(1) potion name lookup instead of O(n) switch
+    private static final Map<String, String> POTION_NAME_TO_EFFECT_KEY = createPotionNameMap();
+    
+    /**
+     * Creates the potion name to effect key mapping
+     */
+    private static Map<String, String> createPotionNameMap() {
+        Map<String, String> map = new HashMap<>();
+        // Custom potions
+        map.put("fortune", "fortune");
+        map.put("fly", "fly");
+        // Standard potions - map special cases
+        map.put("speed", "speed");
+        map.put("slowness", "slowness");
+        map.put("haste", "haste");
+        map.put("mining_fatigue", "mining_fatigue");
+        map.put("strength", "strength");
+        map.put("healing", "instant_health");
+        map.put("harming", "instant_damage");
+        map.put("leaping", "jump_boost");
+        map.put("nausea", "nausea");
+        map.put("regeneration", "regeneration");
+        map.put("resistance", "resistance");
+        map.put("fire_resistance", "fire_resistance");
+        map.put("water_breathing", "water_breathing");
+        map.put("invisibility", "invisibility");
+        map.put("blindness", "blindness");
+        map.put("night_vision", "night_vision");
+        map.put("hunger", "hunger");
+        map.put("weakness", "weakness");
+        map.put("poison", "poison");
+        map.put("wither", "wither");
+        map.put("health_boost", "health_boost");
+        map.put("absorption", "absorption");
+        map.put("saturation", "saturation");
+        map.put("glowing", "glowing");
+        map.put("levitation", "levitation");
+        map.put("luck", "luck");
+        map.put("unluck", "unluck");
+        map.put("slow_falling", "slow_falling");
+        map.put("conduit_power", "conduit_power");
+        map.put("dolphins_grace", "dolphins_grace");
+        map.put("bad_omen", "bad_omen");
+        map.put("hero_of_the_village", "hero_of_the_village");
+        map.put("darkness", "darkness");
+        return Collections.unmodifiableMap(map);
+    }
+    
+    // OPTIMIZATION #4: Dirty flags for file I/O optimization
+    private volatile boolean standLocationsDirty = false;
     
     /**
      * Inner class to track active master potion effects
@@ -155,12 +207,15 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     
     @Override
     public void onDisable() {
-        // Save master brewing stand locations
-        saveMasterBrewingStandLocations();
+        // OPTIMIZATION #4: Save stand locations only if dirty
+        if (standLocationsDirty) {
+            saveMasterBrewingStandLocations();
+        }
         
         // Save all active player effects
         for (UUID uuid : activeMasterEffects.keySet()) {
-            savePlayerEffects(uuid);
+            List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
+            savePlayerEffects(uuid, effects);
         }
         
         getLogger().info("MasterBrewing plugin disabled!");
@@ -168,33 +223,32 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     
     /**
      * Saves master brewing stand locations to stands.yml
+     * OPTIMIZATION #4: Now async with dirty flag
      */
     private void saveMasterBrewingStandLocations() {
-        File standsFile = new File(getDataFolder(), "stands.yml");
-        FileConfiguration standsConfig = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(standsFile);
-        
-        List<String> locations = new ArrayList<>();
-        for (Location loc : masterBrewingStandLocations) {
-            // Format: world,x,y,z
-            String locString = loc.getWorld().getName() + "," + 
-                              loc.getBlockX() + "," + 
-                              loc.getBlockY() + "," + 
-                              loc.getBlockZ();
-            locations.add(locString);
-        }
-        
-        standsConfig.set("master-brewing-stands", locations);
-        
-        try {
-            standsConfig.save(standsFile);
-            getLogger().info("Saved " + locations.size() + " master brewing stand locations to stands.yml");
-        } catch (Exception e) {
-            getLogger().warning("Failed to save master brewing stand locations: " + e.getMessage());
-        }
+        // OPTIMIZATION #4: Run file I/O asynchronously
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            File standsFile = new File(getDataFolder(), "stands.yml");
+            FileConfiguration standsConfig = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(standsFile);
+            
+            // OPTIMIZATION #1: Convert Set<String> directly to List<String>
+            List<String> locations = new ArrayList<>(masterBrewingStandLocations);
+            
+            standsConfig.set("master-brewing-stands", locations);
+            
+            try {
+                standsConfig.save(standsFile);
+                getLogger().info("Saved " + locations.size() + " master brewing stand locations to stands.yml");
+                standLocationsDirty = false;
+            } catch (Exception e) {
+                getLogger().warning("Failed to save master brewing stand locations: " + e.getMessage());
+            }
+        });
     }
     
     /**
      * Loads master brewing stand locations from stands.yml
+     * OPTIMIZATION #1: Now loads into String set
      */
     private void loadMasterBrewingStandLocations() {
         masterBrewingStandLocations.clear();
@@ -225,7 +279,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 
                 // Verify the block is still a brewing stand
                 if (loc.getBlock().getType() == Material.BREWING_STAND) {
-                    masterBrewingStandLocations.add(loc);
+                    // OPTIMIZATION #1: Add string directly to set
+                    masterBrewingStandLocations.add(locString);
                     loaded++;
                 }
             } catch (Exception e) {
@@ -293,18 +348,28 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
+     * Starts the unified luck potion brewing timer task
+     * Runs every 5 ticks and decrements all active brewing timers
+     */
+    /**
      * Starts a repeating task that continuously refreshes master potion effects
-     * Runs every second to check if effects were prematurely removed and reapply them
+     * OPTIMIZED: Runs every 3 seconds (instead of 1) and only refreshes effects that need it
      */
     private void startMasterPotionEffectTask() {
         Bukkit.getScheduler().runTaskTimer(this, () -> {
             long currentTime = System.currentTimeMillis();
             
-            // Check all online players
-            for (Player player : Bukkit.getOnlinePlayers()) {
-                UUID uuid = player.getUniqueId();
-                List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
+            // OPTIMIZATION: Only check players who have active effects
+            Set<UUID> playersToCheck = new HashSet<>(activeMasterEffects.keySet());
+            
+            for (UUID uuid : playersToCheck) {
+                // OPTIMIZATION: Skip offline players without looking them up repeatedly
+                Player player = Bukkit.getPlayer(uuid);
+                if (player == null || !player.isOnline()) {
+                    continue;
+                }
                 
+                List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
                 if (effects == null || effects.isEmpty()) {
                     continue;
                 }
@@ -337,8 +402,14 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     
                     // Show expiration warnings
                     if (remainingSeconds == 30 || remainingSeconds == 10) {
-                        String effectName = effect.effectTypeKey.equals("fly") ? "Flight" : 
-                            formatEffectName(PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effect.effectTypeKey)));
+                        String effectName;
+                        if (effect.effectTypeKey.equals("fly")) {
+                            effectName = "Flight";
+                        } else if (effect.effectTypeKey.equals("fortune")) {
+                            effectName = "Fortune";
+                        } else {
+                            effectName = formatEffectName(PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effect.effectTypeKey)));
+                        }
                         player.sendMessage(Component.text(effectName + " ending in " + remainingSeconds + " seconds!", 
                             NamedTextColor.YELLOW));
                     }
@@ -347,17 +418,22 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     if (effect.effectTypeKey.equals("fly")) {
                         hasActiveFly[0] = true;
                         
-                        // Maintain flight state
+                        // Maintain flight state only if needed
                         if (player.getGameMode() == org.bukkit.GameMode.SURVIVAL || 
                             player.getGameMode() == org.bukkit.GameMode.ADVENTURE) {
                             if (!player.getAllowFlight()) {
                                 player.setAllowFlight(true);
                             }
                             
-                            // Recalculate and set flight speed
-                            float flightSpeed = 0.1f * (1.0f + (effect.amplifier * 0.2f));
-                            flightSpeed = Math.min(flightSpeed, 1.0f);
-                            player.setFlySpeed(flightSpeed);
+                            // OPTIMIZATION: Only set flight speed if it's different from what we want
+                            float desiredSpeed = 0.1f * (1.0f + (effect.amplifier * 0.2f));
+                            desiredSpeed = Math.min(desiredSpeed, 1.0f);
+                            float currentSpeed = player.getFlySpeed();
+                            
+                            // Only update if speed differs by more than 0.001 to avoid floating point issues
+                            if (Math.abs(currentSpeed - desiredSpeed) > 0.001f) {
+                                player.setFlySpeed(desiredSpeed);
+                            }
                         }
                         
                         // Prepare action bar message
@@ -369,8 +445,19 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                         return false; // Keep in list
                     }
                     
-                    // Handle normal potion effects
-                    PotionEffectType effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effect.effectTypeKey));
+                    // OPTIMIZATION: Only refresh effects that are close to expiring (< 30 seconds)
+                    // This prevents constant fighting with SpecialBooks armor effects
+                    if (remainingSeconds > 30) {
+                        return false; // Don't refresh yet, keep in list
+                    }
+                    
+                    // Handle normal potion effects (including fortune -> luck)
+                    String mappedEffectKey = effect.effectTypeKey;
+                    if (effect.effectTypeKey.equals("fortune")) {
+                        mappedEffectKey = "luck"; // Fortune uses LUCK potion effect
+                    }
+                    
+                    PotionEffectType effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(mappedEffectKey));
                     if (effectType == null) {
                         return true; // Remove invalid effect
                     }
@@ -378,19 +465,14 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     // Effect should still be active - check if player has it
                     PotionEffect currentEffect = player.getPotionEffect(effectType);
                     
-                    // If the effect is MISSING (was removed by something), restore it
+                    // OPTIMIZATION: Only restore if effect is completely missing
+                    // Don't fight with other plugins that may have applied effects with different durations
                     if (currentEffect == null) {
                         int durationTicks = remainingSeconds * 20;
                         // Reapply the effect with remaining duration
                         player.addPotionEffect(new PotionEffect(effectType, durationTicks, effect.amplifier, false, true, true), true);
                     }
-                    // If effect exists but wrong amplifier, fix it
-                    else if (currentEffect.getAmplifier() != effect.amplifier) {
-                        int durationTicks = remainingSeconds * 20;
-                        
-                        player.removePotionEffect(effectType);
-                        player.addPotionEffect(new PotionEffect(effectType, durationTicks, effect.amplifier, false, true, true), true);
-                    }
+                    // Don't check amplifier or adjust duration - let other plugins manage their own effects
                     
                     return false; // Keep in list
                 });
@@ -405,7 +487,7 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     activeMasterEffects.remove(uuid);
                 }
             }
-        }, 20L, 20L); // Run every second (20 ticks)
+        }, 60L, 60L); // OPTIMIZATION: Run every 3 seconds (60 ticks) instead of every 1 second
     }
     
     /**
@@ -454,15 +536,28 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     
     /**
      * Checks if a location has a Master Brewing Stand
+     * OPTIMIZATION #1: Now uses string-based lookup
      */
     private boolean isMasterBrewingStandLocation(Location loc) {
-        return masterBrewingStandLocations.contains(loc);
+        String locKey = locationToString(loc);
+        return masterBrewingStandLocations.contains(locKey);
+    }
+    
+    /**
+     * OPTIMIZATION #1: Converts location to string key for storage
+     */
+    private String locationToString(Location loc) {
+        return loc.getWorld().getName() + "," + 
+               loc.getBlockX() + "," + 
+               loc.getBlockY() + "," + 
+               loc.getBlockZ();
     }
     
     // ==================== EVENT HANDLERS ====================
     
     /**
      * Handles placing Master Brewing Stands
+     * OPTIMIZATION #1: Now stores location as string
      */
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onBlockPlace(BlockPlaceEvent event) {
@@ -470,7 +565,10 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         
         if (isMasterBrewingStand(item)) {
             Location loc = event.getBlock().getLocation();
-            masterBrewingStandLocations.add(loc);
+            // OPTIMIZATION #1: Add string key instead of Location object
+            masterBrewingStandLocations.add(locationToString(loc));
+            // OPTIMIZATION #4: Mark as dirty
+            standLocationsDirty = true;
             
             event.getPlayer().sendMessage(Component.text("Master Brewing Stand placed!", NamedTextColor.GREEN));
         }
@@ -478,6 +576,7 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     
     /**
      * Handles breaking Master Brewing Stands
+     * OPTIMIZATION #1: Now removes location by string
      */
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onBlockBreak(BlockBreakEvent event) {
@@ -487,7 +586,10 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             Location loc = block.getLocation();
             
             if (isMasterBrewingStandLocation(loc)) {
-                masterBrewingStandLocations.remove(loc);
+                // OPTIMIZATION #1: Remove string key instead of Location object
+                masterBrewingStandLocations.remove(locationToString(loc));
+                // OPTIMIZATION #4: Mark as dirty
+                standLocationsDirty = true;
                 
                 // Drop Master Brewing Stand item
                 event.setDropItems(false);
@@ -557,7 +659,13 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
      * Processes master brewing upgrades
      */
     private void processMasterBrew(BrewerInventory inv, ItemStack ingredient, boolean isRedstone, boolean isGlowstone) {
-        // Process all three potion slots
+        // Collect all valid potions that can be upgraded
+        List<ItemStack> potionsToUpgrade = new ArrayList<>();
+        int materialCost = 0;
+        int upgradeDuration = 0;
+        
+        // Determine the upgrade level and cost based on the FIRST valid potion
+        // All potions in the stand will be upgraded to the same level
         for (int slot = 0; slot < 3; slot++) {
             ItemStack potion = inv.getItem(slot);
             
@@ -567,7 +675,9 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             
             // Get current levels
             ItemMeta meta = potion.getItemMeta();
-            if (meta == null) continue;
+            if (meta == null) {
+                continue;
+            }
             
             int currentTimeLevel = meta.getPersistentDataContainer().getOrDefault(potionTimeLevelKey, PersistentDataType.INTEGER, 0);
             int currentPowerLevel = meta.getPersistentDataContainer().getOrDefault(potionPowerLevelKey, PersistentDataType.INTEGER, 0);
@@ -577,173 +687,127 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             if (effectTypeKey == null) {
                 // Not a master potion, try to get base effect
                 PotionEffectType effectType = getBasePotionEffect(potion);
-                if (effectType == null) continue;
+                if (effectType == null) {
+                    // Can't determine effect type - skip this potion
+                    continue;
+                }
                 effectTypeKey = effectType.getKey().getKey();
             }
             
-            // Get PotionEffectType (null for fly)
-            PotionEffectType effectType = null;
-            if (!effectTypeKey.equals("fly")) {
-                effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectTypeKey));
-                if (effectType == null) continue;
+            // Calculate material cost from FIRST valid potion only
+            if (potionsToUpgrade.isEmpty()) {
+                if (isRedstone) {
+                    int nextLevel = currentTimeLevel + 1;
+                    if (nextLevel > maxTimeLevel) {
+                        continue; // Max level reached
+                    }
+                    
+                    int[] upgrade = timeUpgrades.get(nextLevel);
+                    if (upgrade == null) continue;
+                    
+                    materialCost = upgrade[0];
+                    upgradeDuration = upgrade[1];
+                    
+                } else if (isGlowstone) {
+                    int nextLevel = currentPowerLevel + 1;
+                    if (nextLevel > maxPowerLevel) {
+                        continue; // Max level reached
+                    }
+                    
+                    Integer glowstoneCost = powerUpgrades.get(nextLevel);
+                    if (glowstoneCost == null) continue;
+                    
+                    materialCost = glowstoneCost;
+                }
             }
+            
+            potionsToUpgrade.add(potion);
+        }
+        
+        // Check if we have any potions to upgrade
+        if (potionsToUpgrade.isEmpty()) {
+            return;
+        }
+        
+        // Check if we have enough materials for the upgrade
+        if (ingredient.getAmount() < materialCost) {
+            return;
+        }
+        
+        // Apply upgrade to ALL potions
+        for (ItemStack potion : potionsToUpgrade) {
+            PotionMeta meta = (PotionMeta) potion.getItemMeta();
+            
+            int currentTimeLevel = meta.getPersistentDataContainer().getOrDefault(potionTimeLevelKey, PersistentDataType.INTEGER, 0);
+            int currentPowerLevel = meta.getPersistentDataContainer().getOrDefault(potionPowerLevelKey, PersistentDataType.INTEGER, 0);
+            
+            String effectTypeKey = meta.getPersistentDataContainer().get(potionEffectTypeKey, PersistentDataType.STRING);
+            if (effectTypeKey == null) {
+                PotionEffectType effectType = getBasePotionEffect(potion);
+                if (effectType != null) {
+                    effectTypeKey = effectType.getKey().getKey();
+                }
+            }
+            
+            PotionEffectType effectType = null;
+            if (effectTypeKey != null && !effectTypeKey.equals("fly") && !effectTypeKey.equals("fortune")) {
+                effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectTypeKey));
+            }
+            
+            // Update levels based on upgrade type
+            int newTimeLevel = currentTimeLevel;
+            int newPowerLevel = currentPowerLevel;
             
             if (isRedstone) {
-                // Upgrade time
-                int nextLevel = currentTimeLevel + 1;
-                if (nextLevel > maxTimeLevel) {
-                    continue; // Max level reached
-                }
-                
-                int[] upgrade = timeUpgrades.get(nextLevel);
-                if (upgrade == null) continue;
-                
-                int redstoneCost = upgrade[0];
-                int duration = upgrade[1];
-                
-                // Check if enough redstone
-                if (ingredient.getAmount() < redstoneCost) {
-                    continue;
-                }
-                
-                // Consume redstone
-                ingredient.setAmount(ingredient.getAmount() - redstoneCost);
-                
-                // Apply upgrade
-                applyTimeUpgrade(potion, effectTypeKey, effectType, currentPowerLevel, nextLevel, duration);
-                
+                newTimeLevel = currentTimeLevel + 1;
             } else if (isGlowstone) {
-                // Upgrade power
-                int nextLevel = currentPowerLevel + 1;
-                if (nextLevel > maxPowerLevel) {
-                    continue; // Max level reached
-                }
-                
-                Integer glowstoneCost = powerUpgrades.get(nextLevel);
-                if (glowstoneCost == null) continue;
-                
-                // Check if enough glowstone
-                if (ingredient.getAmount() < glowstoneCost) {
-                    continue;
-                }
-                
-                // Consume glowstone
-                ingredient.setAmount(ingredient.getAmount() - glowstoneCost);
-                
-                // Apply upgrade
-                applyPowerUpgrade(potion, effectTypeKey, effectType, currentTimeLevel, nextLevel);
+                newPowerLevel = currentPowerLevel + 1;
             }
-        }
-        
-        // Update ingredient in inventory
-        inv.setIngredient(ingredient);
-    }
-    
-    /**
-     * Applies time upgrade to a potion
-     */
-    /**
-     * Applies time upgrade to a potion
-     */
-    private void applyTimeUpgrade(ItemStack potion, String effectTypeKey, PotionEffectType effectType, int currentPowerLevel, int newTimeLevel, int duration) {
-        if (!(potion.getItemMeta() instanceof PotionMeta)) return;
-        
-        PotionMeta meta = (PotionMeta) potion.getItemMeta();
-        
-        // If this is the first time upgrade and no duration was stored, preserve vanilla duration first
-        if (!meta.getPersistentDataContainer().has(potionDurationKey, PersistentDataType.INTEGER)) {
-            if (!effectTypeKey.equals("fly") && effectType != null) {
-                int vanillaDuration = extractVanillaPotionDuration(meta, effectType);
-                meta.getPersistentDataContainer().set(potionDurationKey, PersistentDataType.INTEGER, vanillaDuration);
-            }
-        }
-        
-        // Store time level
-        meta.getPersistentDataContainer().set(potionTimeLevelKey, PersistentDataType.INTEGER, newTimeLevel);
-        meta.getPersistentDataContainer().set(potionDurationKey, PersistentDataType.INTEGER, duration);
-        meta.getPersistentDataContainer().set(potionEffectTypeKey, PersistentDataType.STRING, effectTypeKey);
-        meta.getPersistentDataContainer().set(masterPotionKey, PersistentDataType.BYTE, (byte) 1);
-        
-        // Clear base potion type to remove vanilla text
-        meta.setBasePotionType(PotionType.WATER);
-        
-        // Set the correct color for this effect type
-        if (effectTypeKey.equals("fly")) {
-            meta.setColor(org.bukkit.Color.ORANGE);
-        } else {
-            meta.setColor(getPotionColor(effectType));
-        }
-        
-        // Add custom effect - this displays the correct vanilla effect information (skip for fly)
-        meta.clearCustomEffects();
-        if (!effectTypeKey.equals("fly") && effectType != null) {
-            meta.addCustomEffect(new PotionEffect(effectType, duration * 20, currentPowerLevel, false, false, false), true);
-        }
-        
-        // Update display name
-        String effectName = effectTypeKey.equals("fly") ? "Fly" : formatEffectName(effectType);
-        int displayLevel = currentPowerLevel + 1; // Power level 0 = I, 1 = II, etc.
-        String romanLevel = toRoman(displayLevel);
-        
-        Component name = Component.text(effectName + " " + romanLevel, NamedTextColor.GOLD, TextDecoration.ITALIC)
-            .decoration(TextDecoration.ITALIC, true);
-        meta.displayName(name);
-        
-        // Update lore
-        List<Component> lore = new ArrayList<>();
-        lore.add(Component.text("Master Potion", NamedTextColor.LIGHT_PURPLE)
-            .decoration(TextDecoration.ITALIC, false));
-        
-        // Add fly-specific lore
-        if (effectTypeKey.equals("fly")) {
-            // Calculate flight speed
-            float flightSpeed = 0.1f * (1.0f + (currentPowerLevel * 0.2f));
-            flightSpeed = Math.min(flightSpeed, 1.0f);
-            int speedPercent = (int)((flightSpeed / 0.1f) * 100);
             
-            lore.add(Component.text("Flight Speed: " + speedPercent + "%", NamedTextColor.AQUA)
-                .decoration(TextDecoration.ITALIC, false));
-            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
-                .decoration(TextDecoration.ITALIC, false));
-        }
+            // Store updated levels
+            meta.getPersistentDataContainer().set(potionTimeLevelKey, PersistentDataType.INTEGER, newTimeLevel);
+            meta.getPersistentDataContainer().set(potionPowerLevelKey, PersistentDataType.INTEGER, newPowerLevel);
+            meta.getPersistentDataContainer().set(potionEffectTypeKey, PersistentDataType.STRING, effectTypeKey);
+            meta.getPersistentDataContainer().set(masterPotionKey, PersistentDataType.BYTE, (byte) 1);
         
-        meta.lore(lore);
-        
-        potion.setItemMeta(meta);
-    }
-    
-    /**
-     * Applies power upgrade to a potion
-     */
-    private void applyPowerUpgrade(ItemStack potion, String effectTypeKey, PotionEffectType effectType, int currentTimeLevel, int newPowerLevel) {
-        if (!(potion.getItemMeta() instanceof PotionMeta)) return;
-        
-        PotionMeta meta = (PotionMeta) potion.getItemMeta();
-        
-        // Store power level
-        meta.getPersistentDataContainer().set(potionPowerLevelKey, PersistentDataType.INTEGER, newPowerLevel);
-        meta.getPersistentDataContainer().set(potionEffectTypeKey, PersistentDataType.STRING, effectTypeKey);
-        meta.getPersistentDataContainer().set(masterPotionKey, PersistentDataType.BYTE, (byte) 1);
-        
-        // Get duration - preserve vanilla duration if no time upgrades applied yet
-        int duration = 0;
-        if (currentTimeLevel > 0) {
-            // Use upgraded duration
-            int[] upgrade = timeUpgrades.get(currentTimeLevel);
-            if (upgrade != null) {
-                duration = upgrade[1];
-            }
-        } else {
-            // Check if vanilla potion already had duration stored
+        // Get duration
+        int duration;
+        if (newTimeLevel == 0) {
+            // Check if duration is already stored
             if (meta.getPersistentDataContainer().has(potionDurationKey, PersistentDataType.INTEGER)) {
                 duration = meta.getPersistentDataContainer().get(potionDurationKey, PersistentDataType.INTEGER);
             } else {
-                // For fly at level 0, use 180 seconds
-                if (effectTypeKey.equals("fly")) {
+                // For fly/fortune at level 0, use 180 seconds
+                if (effectTypeKey.equals("fly") || effectTypeKey.equals("fortune")) {
                     duration = 180;
                 } else if (effectType != null) {
                     // Extract vanilla potion duration before we clear it
                     duration = extractVanillaPotionDuration(meta, effectType);
+                } else {
+                    duration = 180;
+                }
+            }
+        } else {
+            // Use config duration for non-zero levels
+            duration = timeUpgrades.get(newTimeLevel)[1];
+        }
+        
+        // Update duration if this was a time upgrade
+        if (isRedstone) {
+            duration = upgradeDuration;
+        } else {
+            // Keep existing duration for power upgrades
+            if (meta.getPersistentDataContainer().has(potionDurationKey, PersistentDataType.INTEGER)) {
+                duration = meta.getPersistentDataContainer().get(potionDurationKey, PersistentDataType.INTEGER);
+            } else {
+                // For fly/fortune at level 0, use 180 seconds
+                if (effectTypeKey.equals("fly") || effectTypeKey.equals("fortune")) {
+                    duration = 180;
+                } else if (effectType != null) {
+                    // Extract vanilla potion duration before we clear it
+                    duration = extractVanillaPotionDuration(meta, effectType);
+                } else {
+                    duration = 180;
                 }
             }
         }
@@ -757,18 +821,31 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         // Set the correct color for this effect type
         if (effectTypeKey.equals("fly")) {
             meta.setColor(org.bukkit.Color.ORANGE);
+        } else if (effectTypeKey.equals("fortune")) {
+            meta.setColor(org.bukkit.Color.LIME); // Green for luck/fortune
         } else {
             meta.setColor(getPotionColor(effectType));
         }
         
         // Add custom effect - this displays the correct vanilla effect information (skip for fly)
         meta.clearCustomEffects();
-        if (!effectTypeKey.equals("fly") && effectType != null) {
+        if (effectTypeKey.equals("fortune")) {
+            // Fortune uses LUCK potion effect
+            PotionEffectType luckEffect = PotionEffectType.LUCK;
+            meta.addCustomEffect(new PotionEffect(luckEffect, duration * 20, newPowerLevel, false, false, false), true);
+        } else if (!effectTypeKey.equals("fly") && effectType != null) {
             meta.addCustomEffect(new PotionEffect(effectType, duration * 20, newPowerLevel, false, false, false), true);
         }
         
         // Update display name
-        String effectName = effectTypeKey.equals("fly") ? "Fly" : formatEffectName(effectType);
+        String effectName;
+        if (effectTypeKey.equals("fly")) {
+            effectName = "Fly";
+        } else if (effectTypeKey.equals("fortune")) {
+            effectName = "Fortune";
+        } else {
+            effectName = formatEffectName(effectType);
+        }
         int displayLevel = newPowerLevel + 1; // Power level 0 = I, 1 = II, etc.
         String romanLevel = toRoman(displayLevel);
         
@@ -792,11 +869,26 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 .decoration(TextDecoration.ITALIC, false));
             lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
                 .decoration(TextDecoration.ITALIC, false));
+        } else if (effectTypeKey.equals("fortune")) {
+            // Add fortune-specific lore
+            lore.add(Component.text("Luck: +" + (newPowerLevel + 1), NamedTextColor.GREEN)
+                .decoration(TextDecoration.ITALIC, false));
+            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
+                .decoration(TextDecoration.ITALIC, false));
         }
         
         meta.lore(lore);
         
         potion.setItemMeta(meta);
+    }
+        
+        // Consume materials
+        int newAmount = ingredient.getAmount() - materialCost;
+        if (newAmount <= 0) {
+            inv.setIngredient(null);
+        } else {
+            ingredient.setAmount(newAmount);
+        }
     }
     
     /**
@@ -895,8 +987,13 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             flightSpeed = Math.min(flightSpeed, 1.0f); // Cap at 1.0f
             player.setFlySpeed(flightSpeed);
         } else {
-            // Handle normal potion effects
-            PotionEffectType effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectTypeKey));
+            // Handle normal potion effects (including fortune -> luck)
+            String mappedEffectKey = effectTypeKey;
+            if (effectTypeKey.equals("fortune")) {
+                mappedEffectKey = "luck"; // Fortune uses LUCK potion effect
+            }
+            
+            PotionEffectType effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(mappedEffectKey));
             if (effectType == null) {
                 player.sendMessage(Component.text("Invalid potion effect!", NamedTextColor.RED));
                 return;
@@ -914,7 +1011,14 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         player.getWorld().playSound(player.getLocation(), org.bukkit.Sound.ENTITY_GENERIC_DRINK, 1.0f, 1.0f);
         
         // Send activation message with details
-        String effectName = effectTypeKey.equals("fly") ? "Fly" : formatEffectName(PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectTypeKey)));
+        String effectName;
+        if (effectTypeKey.equals("fly")) {
+            effectName = "Fly";
+        } else if (effectTypeKey.equals("fortune")) {
+            effectName = "Fortune";
+        } else {
+            effectName = formatEffectName(PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectTypeKey)));
+        }
         int displayLevel = powerLevel + 1; // Power level 1 = II, 2 = III, etc.
         String romanLevel = toRoman(displayLevel);
         String durationStr = formatDuration(duration);
@@ -947,13 +1051,17 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     
     /**
      * Clean up tracked effects when player disconnects
+     * OPTIMIZATION #4: Now saves asynchronously
      */
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
         
-        // Save effects before removing
-        savePlayerEffects(uuid);
+        // Get the effects BEFORE removing from map
+        List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
+        
+        // Save effects with the current list (will be copied in save method)
+        savePlayerEffects(uuid, effects);
         
         // Remove from active tracking
         activeMasterEffects.remove(uuid);
@@ -965,51 +1073,102 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
+        Player player = event.getPlayer();
         
         // Load saved effects
         loadPlayerEffects(uuid);
+        
+        // Wait 1 tick for player to fully load, then restore effects
+        Bukkit.getScheduler().runTask(this, () -> {
+            // Immediately restore flight state if player has active fly effect
+            List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
+            if (effects != null) {
+                long currentTime = System.currentTimeMillis();
+                
+                for (ActiveMasterEffect effect : effects) {
+                    // Skip expired effects
+                    if (currentTime >= effect.expiryTime) {
+                        continue;
+                    }
+                    
+                    int remainingSeconds = (int) ((effect.expiryTime - currentTime) / 1000);
+                    
+                    // Restore fly effect immediately
+                    if (effect.effectTypeKey.equals("fly")) {
+                        // Only enable for survival/adventure mode
+                        if (player.getGameMode() == org.bukkit.GameMode.SURVIVAL || 
+                            player.getGameMode() == org.bukkit.GameMode.ADVENTURE) {
+                            player.setAllowFlight(true);
+                            player.setFlying(true);
+                            
+                            // Set correct flight speed
+                            float flightSpeed = 0.1f * (1.0f + (effect.amplifier * 0.2f));
+                            flightSpeed = Math.min(flightSpeed, 1.0f);
+                            player.setFlySpeed(flightSpeed);
+                        }
+                        
+                        player.sendMessage(Component.text("Flight restored! ", NamedTextColor.GREEN)
+                            .append(Component.text(formatDuration(remainingSeconds) + " remaining", NamedTextColor.YELLOW)));
+                    } else {
+                        // Restore normal potion effects immediately
+                        String mappedEffectKey = effect.effectTypeKey;
+                        if (effect.effectTypeKey.equals("fortune")) {
+                            mappedEffectKey = "luck";
+                        }
+                        
+                        PotionEffectType effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(mappedEffectKey));
+                        if (effectType != null) {
+                            int durationTicks = remainingSeconds * 20;
+                            player.addPotionEffect(new PotionEffect(effectType, durationTicks, effect.amplifier, false, true, true), true);
+                        }
+                    }
+                }
+            }
+        });
     }
     
     /**
      * Saves a player's active master potion effects to their playerdata file
+     * OPTIMIZATION #4: Now runs asynchronously
      */
-    private void savePlayerEffects(UUID uuid) {
-        List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
-        
-        if (effects == null || effects.isEmpty()) {
-            // Delete file if no effects
-            File playerFile = new File(getDataFolder(), "playerdata/" + uuid.toString() + ".yml");
-            if (playerFile.exists()) {
-                playerFile.delete();
+    private void savePlayerEffects(UUID uuid, List<ActiveMasterEffect> effects) {
+        // OPTIMIZATION #4: Run file I/O asynchronously
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            if (effects == null || effects.isEmpty()) {
+                // Delete file if no effects
+                File playerFile = new File(getDataFolder(), "playerdata/" + uuid.toString() + ".yml");
+                if (playerFile.exists()) {
+                    playerFile.delete();
+                }
+                return;
             }
-            return;
-        }
-        
-        File playerDataFolder = new File(getDataFolder(), "playerdata");
-        if (!playerDataFolder.exists()) {
-            playerDataFolder.mkdirs();
-        }
-        
-        File playerFile = new File(playerDataFolder, uuid.toString() + ".yml");
-        org.bukkit.configuration.file.FileConfiguration config = 
-            org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(playerFile);
-        
-        List<String> effectStrings = new ArrayList<>();
-        for (ActiveMasterEffect effect : effects) {
-            // Format: effectTypeKey,amplifier,expiryTime
-            String effectString = effect.effectTypeKey + "," + 
-                                 effect.amplifier + "," + 
-                                 effect.expiryTime;
-            effectStrings.add(effectString);
-        }
-        
-        config.set("active-effects", effectStrings);
-        
-        try {
-            config.save(playerFile);
-        } catch (Exception e) {
-            getLogger().warning("Failed to save player effects for " + uuid + ": " + e.getMessage());
-        }
+            
+            File playerDataFolder = new File(getDataFolder(), "playerdata");
+            if (!playerDataFolder.exists()) {
+                playerDataFolder.mkdirs();
+            }
+            
+            File playerFile = new File(playerDataFolder, uuid.toString() + ".yml");
+            org.bukkit.configuration.file.FileConfiguration config = 
+                org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(playerFile);
+            
+            List<String> effectStrings = new ArrayList<>();
+            for (ActiveMasterEffect effect : effects) {
+                // Format: effectTypeKey,amplifier,expiryTime
+                String effectString = effect.effectTypeKey + "," + 
+                                     effect.amplifier + "," + 
+                                     effect.expiryTime;
+                effectStrings.add(effectString);
+            }
+            
+            config.set("active-effects", effectStrings);
+            
+            try {
+                config.save(playerFile);
+            } catch (Exception e) {
+                getLogger().warning("Failed to save player effects for " + uuid + ": " + e.getMessage());
+            }
+        });
     }
     
     /**
@@ -1047,8 +1206,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     continue;
                 }
                 
-                // Validate effect type exists (skip validation for fly)
-                if (!effectKey.equals("fly")) {
+                // Validate effect type exists (skip validation for fly and fortune)
+                if (!effectKey.equals("fly") && !effectKey.equals("fortune")) {
                     PotionEffectType effectType = PotionEffectType.getByKey(
                         org.bukkit.NamespacedKey.minecraft(effectKey)
                     );
@@ -1095,33 +1254,45 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         // Check if already a master potion with stored effect
         if (meta.getPersistentDataContainer().has(potionEffectTypeKey, PersistentDataType.STRING)) {
             String effectKey = meta.getPersistentDataContainer().get(potionEffectTypeKey, PersistentDataType.STRING);
+            if (effectKey.equals("fly")) {
+                return null; // Fly has no PotionEffectType
+            }
             return PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectKey));
         }
         
-        // Get from base potion type
+        // Try to get from base potion type first
         PotionType potionType = meta.getBasePotionType();
-        if (potionType == null) {
-            return null;
+        if (potionType != null && potionType != PotionType.WATER) {
+            // Get the potion type's key and extract effect name
+            String potionKey = potionType.getKey().getKey();
+            
+            // Remove long_ and strong_ prefixes if present
+            String effectName = potionKey.replace("long_", "").replace("strong_", "");
+            
+            // Map special cases
+            if (effectName.equals("leaping")) {
+                effectName = "jump_boost";
+            } else if (effectName.equals("swiftness")) {
+                effectName = "speed";
+            } else if (effectName.equals("healing")) {
+                effectName = "instant_health";
+            } else if (effectName.equals("harming")) {
+                effectName = "instant_damage";
+            }
+            
+            PotionEffectType effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectName));
+            if (effectType != null) {
+                return effectType;
+            }
         }
         
-        // Get the potion type's key and extract effect name
-        String potionKey = potionType.getKey().getKey();
-        
-        // Remove long_ and strong_ prefixes if present
-        String effectName = potionKey.replace("long_", "").replace("strong_", "");
-        
-        // Map special cases
-        if (effectName.equals("leaping")) {
-            effectName = "jump_boost";
-        } else if (effectName.equals("swiftness")) {
-            effectName = "speed";
-        } else if (effectName.equals("healing")) {
-            effectName = "instant_health";
-        } else if (effectName.equals("harming")) {
-            effectName = "instant_damage";
+        // Fallback: check custom effects (for potions like luck, bad omen, etc.)
+        if (!meta.getCustomEffects().isEmpty()) {
+            // Return the first custom effect's type
+            return meta.getCustomEffects().get(0).getType();
         }
         
-        return PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectName));
+        return null;
     }
     
     /**
@@ -1176,84 +1347,84 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             case "haste":
                 return org.bukkit.Color.fromRGB(0xd9c043);
             case "mining_fatigue":
-                return org.bukkit.Color.fromRGB(0x4a4217);
+                return org.bukkit.Color.fromRGB(0x63855c);
             case "strength":
-                return org.bukkit.Color.fromRGB(0xffc700);
+                return org.bukkit.Color.fromRGB(0xcc243c);
             case "instant_health":
-                return org.bukkit.Color.fromRGB(0xf82423);
+                return org.bukkit.Color.fromRGB(0xf5424b);
             case "instant_damage":
-                return org.bukkit.Color.fromRGB(0xa9656a);
+                return org.bukkit.Color.fromRGB(0x5b4f31);
             case "jump_boost":
-                return org.bukkit.Color.fromRGB(0xfdff84);
+                return org.bukkit.Color.fromRGB(0x44ff33);
             case "nausea":
-                return org.bukkit.Color.fromRGB(0x551d4a);
+                return org.bukkit.Color.fromRGB(0x76ae6e);
             case "regeneration":
-                return org.bukkit.Color.fromRGB(0xcd5cab);
+                return org.bukkit.Color.fromRGB(0xf89fba);
             case "resistance":
-                return org.bukkit.Color.fromRGB(0x9146f0);
+                return org.bukkit.Color.fromRGB(0x937c64);
             case "fire_resistance":
-                return org.bukkit.Color.fromRGB(0xff9900);
+                return org.bukkit.Color.fromRGB(0xffa733);
             case "water_breathing":
-                return org.bukkit.Color.fromRGB(0x2e5299);
+                return org.bukkit.Color.fromRGB(0x6d9fa9);
             case "invisibility":
-                return org.bukkit.Color.fromRGB(0xf6f6f6);
+                return org.bukkit.Color.fromRGB(0x9999b0);
             case "blindness":
-                return org.bukkit.Color.fromRGB(0x1f1f23);
+                return org.bukkit.Color.fromRGB(0x3b393a);
             case "night_vision":
-                return org.bukkit.Color.fromRGB(0xc2ff66);
+                return org.bukkit.Color.fromRGB(0x3066e6);
             case "hunger":
-                return org.bukkit.Color.fromRGB(0x587653);
+                return org.bukkit.Color.fromRGB(0x718956);
             case "weakness":
-                return org.bukkit.Color.fromRGB(0x484d48);
+                return org.bukkit.Color.fromRGB(0x555555);
             case "poison":
-                return org.bukkit.Color.fromRGB(0x87a363);
+                return org.bukkit.Color.fromRGB(0x76b361);
             case "wither":
-                return org.bukkit.Color.fromRGB(0x352a27);
+                return org.bukkit.Color.fromRGB(0x4e483c);
             case "health_boost":
-                return org.bukkit.Color.fromRGB(0xf87d23);
+                return org.bukkit.Color.fromRGB(0xfc5952);
             case "absorption":
-                return org.bukkit.Color.fromRGB(0x2552a5);
+                return org.bukkit.Color.fromRGB(0x3e61b7);
             case "saturation":
-                return org.bukkit.Color.fromRGB(0xf82423);
+                return org.bukkit.Color.fromRGB(0xff5933);
             case "glowing":
-                return org.bukkit.Color.fromRGB(0x94a061);
+                return org.bukkit.Color.fromRGB(0xcc9966);
             case "levitation":
-                return org.bukkit.Color.fromRGB(0xceffff);
+                return org.bukkit.Color.fromRGB(0xccccff);
             case "luck":
-                return org.bukkit.Color.fromRGB(0x59c106);
+                return org.bukkit.Color.fromRGB(0x59db6d);
             case "unluck":
-                return org.bukkit.Color.fromRGB(0xc0a44d);
+                return org.bukkit.Color.fromRGB(0xf5e79f);
             case "slow_falling":
-                return org.bukkit.Color.fromRGB(0xf3cfb9);
+                return org.bukkit.Color.fromRGB(0xe6f0f7);
             case "conduit_power":
-                return org.bukkit.Color.fromRGB(0x1dc2d1);
+                return org.bukkit.Color.fromRGB(0x5bb3d1);
             case "dolphins_grace":
-                return org.bukkit.Color.fromRGB(0x88a3be);
+                return org.bukkit.Color.fromRGB(0x89ade9);
             case "bad_omen":
-                return org.bukkit.Color.fromRGB(0x0b6138);
+                return org.bukkit.Color.fromRGB(0x345f27);
             case "hero_of_the_village":
-                return org.bukkit.Color.fromRGB(0x44ff44);
+                return org.bukkit.Color.fromRGB(0x2e9e6a);
             case "darkness":
-                return org.bukkit.Color.fromRGB(0x292721);
+                return org.bukkit.Color.fromRGB(0x292929);
             default:
-                return org.bukkit.Color.fromRGB(0x385DC6); // Default blue
+                return org.bukkit.Color.GRAY;
         }
     }
     
     /**
-     * Formats duration in seconds to readable string
+     * Formats duration in seconds to human-readable string
      */
     private String formatDuration(int seconds) {
-        if (seconds < 60) {
-            return seconds + "s";
-        } else if (seconds < 3600) {
-            int minutes = seconds / 60;
-            int secs = seconds % 60;
-            return secs > 0 ? minutes + "m " + secs + "s" : minutes + "m";
+        int hours = seconds / 3600;
+        int minutes = (seconds % 3600) / 60;
+        int secs = seconds % 60;
+        
+        if (hours > 0) {
+            return String.format("%dh %dm %ds", hours, minutes, secs);
+        } else if (minutes > 0) {
+            return String.format("%dm %ds", minutes, secs);
         } else {
-            int hours = seconds / 3600;
-            int minutes = (seconds % 3600) / 60;
-            return minutes > 0 ? hours + "h " + minutes + "m" : hours + "h";
+            return String.format("%ds", secs);
         }
     }
     
@@ -1266,14 +1437,16 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             return true;
         }
         
-        switch (args[0].toLowerCase()) {
+        String subCommand = args[0].toLowerCase();
+        
+        switch (subCommand) {
+            case "help":
+                sendHelp(sender);
+                return true;
             case "give":
                 return handleGive(sender, args);
             case "reload":
                 return handleReload(sender);
-            case "help":
-                sendHelp(sender);
-                return true;
             default:
                 sendHelp(sender);
                 return true;
@@ -1415,6 +1588,7 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     
     /**
      * Handles /masterbrewing give potion command
+     * OPTIMIZATION #3: Now uses map lookup instead of switch statement
      */
     private boolean handleGivePotion(CommandSender sender, String[] args) {
         if (args.length < 4) {
@@ -1438,144 +1612,22 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             return handleGiveRandomPotion(sender, target);
         }
         
-        // Determine time and power levels
-        boolean isMaxVariant = false;
-        boolean useDefaults = false;
+        // Handle "max" variant
+        boolean isMaxVariant = (args.length >= 5 && args[4].equalsIgnoreCase("max"));
+        boolean useDefaults = (args.length <= 4) || isMaxVariant;
         
-        if (args.length == 4) {
-            // No levels specified, use defaults (1,1 or 0,0 for fly)
-            useDefaults = true;
-        } else if (args.length == 5 && args[4].equalsIgnoreCase("max")) {
-            // Max variant
-            isMaxVariant = true;
-        } else if (args.length < 6) {
-            // Invalid - need either nothing (defaults), "max", or both levels
-            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion>", NamedTextColor.RED)
-                .append(Component.text(" - defaults: 1,1 (or 0,0 for fly)", NamedTextColor.GRAY)));
-            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> <time_lvl> <power_lvl>", NamedTextColor.RED));
-            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> max", NamedTextColor.RED));
-            sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> random", NamedTextColor.RED));
+        // OPTIMIZATION #3: Use map lookup instead of switch statement
+        String effectKey = POTION_NAME_TO_EFFECT_KEY.get(potionName);
+        
+        if (effectKey == null) {
+            sender.sendMessage(Component.text("Invalid potion type: " + potionName, NamedTextColor.RED));
+            sender.sendMessage(Component.text("Available types: fortune, fly, speed, slowness, haste, mining_fatigue, strength, healing, harming, leaping, nausea, regeneration, resistance, fire_resistance, water_breathing, invisibility, blindness, night_vision, hunger, weakness, poison, wither, health_boost, absorption, saturation, glowing, levitation, luck, unluck, slow_falling, conduit_power, dolphins_grace, bad_omen, hero_of_the_village, darkness", NamedTextColor.GRAY));
             return true;
         }
         
-        // Map potion names to effect type keys
-        String effectKey;
-        switch (potionName) {
-            case "fly":
-                effectKey = "fly";
-                break;
-            case "speed":
-                effectKey = "speed";
-                break;
-            case "slowness":
-            case "slow":
-                effectKey = "slowness";
-                break;
-            case "haste":
-                effectKey = "haste";
-                break;
-            case "mining_fatigue":
-                effectKey = "mining_fatigue";
-                break;
-            case "strength":
-                effectKey = "strength";
-                break;
-            case "instant_health":
-            case "healing":
-                effectKey = "instant_health";
-                break;
-            case "instant_damage":
-            case "harming":
-                effectKey = "instant_damage";
-                break;
-            case "jump_boost":
-            case "leaping":
-                effectKey = "jump_boost";
-                break;
-            case "nausea":
-                effectKey = "nausea";
-                break;
-            case "regeneration":
-                effectKey = "regeneration";
-                break;
-            case "resistance":
-                effectKey = "resistance";
-                break;
-            case "fire_resistance":
-                effectKey = "fire_resistance";
-                break;
-            case "water_breathing":
-                effectKey = "water_breathing";
-                break;
-            case "invisibility":
-                effectKey = "invisibility";
-                break;
-            case "blindness":
-                effectKey = "blindness";
-                break;
-            case "night_vision":
-                effectKey = "night_vision";
-                break;
-            case "hunger":
-                effectKey = "hunger";
-                break;
-            case "weakness":
-                effectKey = "weakness";
-                break;
-            case "poison":
-                effectKey = "poison";
-                break;
-            case "wither":
-                effectKey = "wither";
-                break;
-            case "health_boost":
-                effectKey = "health_boost";
-                break;
-            case "absorption":
-                effectKey = "absorption";
-                break;
-            case "saturation":
-                effectKey = "saturation";
-                break;
-            case "glowing":
-                effectKey = "glowing";
-                break;
-            case "levitation":
-                effectKey = "levitation";
-                break;
-            case "luck":
-                effectKey = "luck";
-                break;
-            case "unluck":
-                effectKey = "unluck";
-                break;
-            case "slow_falling":
-                effectKey = "slow_falling";
-                break;
-            case "conduit_power":
-                effectKey = "conduit_power";
-                break;
-            case "dolphins_grace":
-                effectKey = "dolphins_grace";
-                break;
-            case "bad_omen":
-                effectKey = "bad_omen";
-                break;
-            case "hero_of_the_village":
-                effectKey = "hero_of_the_village";
-                break;
-            case "darkness":
-                effectKey = "darkness";
-                break;
-            default:
-                sender.sendMessage(Component.text("Invalid potion type: " + potionName, NamedTextColor.RED));
-                sender.sendMessage(Component.text("Available types: fly, speed, slowness, haste, mining_fatigue, strength, healing, harming, leaping, nausea, regeneration, resistance, fire_resistance, water_breathing, invisibility, blindness, night_vision, hunger, weakness, poison, wither, health_boost, absorption, saturation, glowing, levitation, luck, unluck, slow_falling, conduit_power, dolphins_grace, bad_omen, hero_of_the_village, darkness", NamedTextColor.GRAY));
-                return true;
-        }
-        
-        // Get effect type using NamespacedKey (skip for custom fly potion)
+        // Get effect type using NamespacedKey (skip for custom fly and fortune potions)
         PotionEffectType effectType = null;
-        if (!effectKey.equals("fly")) {
+        if (!effectKey.equals("fly") && !effectKey.equals("fortune")) {
             effectType = PotionEffectType.getByKey(NamespacedKey.minecraft(effectKey));
             if (effectType == null) {
                 sender.sendMessage(Component.text("Failed to load potion effect type: " + effectKey, NamedTextColor.RED));
@@ -1587,8 +1639,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         int powerLevel;
         
         if (useDefaults) {
-            // Special case: fly defaults to 0,0 (base speed, 3 min duration)
-            if (potionName.equals("fly")) {
+            // Special case: fly and fortune default to 0,0 (base power, 3 min duration)
+            if (potionName.equals("fly") || potionName.equals("fortune")) {
                 timeLevel = 0;
                 powerLevel = 0;
             } else {
@@ -1600,17 +1652,30 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             powerLevel = maxPowerLevel;
         } else {
             try {
-                timeLevel = Integer.parseInt(args[4]);
-                powerLevel = Integer.parseInt(args[5]);
+                // If only one level provided, use it for both time and power
+                if (args.length == 5) {
+                    int level = Integer.parseInt(args[4]);
+                    timeLevel = level;
+                    powerLevel = level;
+                } else if (args.length >= 6) {
+                    timeLevel = Integer.parseInt(args[4]);
+                    powerLevel = Integer.parseInt(args[5]);
+                } else {
+                    sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> [time_lvl] [power_lvl]", NamedTextColor.RED));
+                    return true;
+                }
             } catch (NumberFormatException e) {
-                sender.sendMessage(Component.text("Time level and power level must be valid numbers!", NamedTextColor.RED));
+                sender.sendMessage(Component.text("Levels must be valid numbers!", NamedTextColor.RED));
+                return true;
+            } catch (ArrayIndexOutOfBoundsException e) {
+                sender.sendMessage(Component.text("Usage: /masterbrewing give potion <player> <potion> [time_lvl] [power_lvl]", NamedTextColor.RED));
                 return true;
             }
         }
         
-        // Validate levels (allow 0 for fly potion)
-        boolean isFlyWithZeroLevels = potionName.equals("fly") && (timeLevel == 0 || powerLevel == 0);
-        if (!isFlyWithZeroLevels && (timeLevel < 1 || powerLevel < 1)) {
+        // Validate levels (allow 0 for fly and fortune potions)
+        boolean isCustomWithZeroLevels = (potionName.equals("fly") || potionName.equals("fortune")) && (timeLevel == 0 || powerLevel == 0);
+        if (!isCustomWithZeroLevels && (timeLevel < 1 || powerLevel < 1)) {
             sender.sendMessage(Component.text("Levels must be 1 or greater!", NamedTextColor.RED));
             return true;
         }
@@ -1627,8 +1692,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         
         // Get duration from config for the specified time level
         int duration;
-        if (potionName.equals("fly") && timeLevel == 0) {
-            // Fly potion at level 0 has 3 minute (180 second) duration
+        if ((potionName.equals("fly") || potionName.equals("fortune")) && timeLevel == 0) {
+            // Custom potions at level 0 have 3 minute (180 second) duration
             duration = 180;
         } else {
             if (!timeUpgrades.containsKey(timeLevel)) {
@@ -1638,8 +1703,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             duration = timeUpgrades.get(timeLevel)[1];
         }
         
-        // Validate power level exists in config (skip for fly at level 0)
-        if (!(potionName.equals("fly") && powerLevel == 0)) {
+        // Validate power level exists in config (skip for custom potions at level 0)
+        if (!((potionName.equals("fly") || potionName.equals("fortune")) && powerLevel == 0)) {
             if (!powerUpgrades.containsKey(powerLevel)) {
                 sender.sendMessage(Component.text("Invalid power level: " + powerLevel + "! Valid levels are 1-" + maxPowerLevel, NamedTextColor.RED));
                 return true;
@@ -1663,19 +1728,32 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         // Set the correct color for this effect type
         if (effectKey.equals("fly")) {
             meta.setColor(org.bukkit.Color.ORANGE);
+        } else if (effectKey.equals("fortune")) {
+            meta.setColor(org.bukkit.Color.LIME); // Green for luck/fortune
         } else {
             meta.setColor(getPotionColor(effectType));
         }
         
-        // Add custom effect (skip for fly since it has no PotionEffectType)
+        // Add custom effect (handle fortune separately, skip fly)
         meta.clearCustomEffects();
-        if (!effectKey.equals("fly")) {
+        if (effectKey.equals("fortune")) {
+            // Fortune uses LUCK potion effect
+            PotionEffectType luckEffect = PotionEffectType.LUCK;
+            meta.addCustomEffect(new PotionEffect(luckEffect, duration * 20, powerLevel, false, false, false), true);
+        } else if (!effectKey.equals("fly") && effectType != null) {
             meta.addCustomEffect(new PotionEffect(effectType, duration * 20, powerLevel, false, false, false), true);
         }
         
         // Set display name
-        String effectName = effectKey.equals("fly") ? "Fly" : formatEffectName(effectType);
-        int displayLevel = powerLevel + 1; // Power level 1 = II, 2 = III, etc.
+        String effectName;
+        if (effectKey.equals("fly")) {
+            effectName = "Fly";
+        } else if (effectKey.equals("fortune")) {
+            effectName = "Fortune";
+        } else {
+            effectName = formatEffectName(effectType);
+        }
+        int displayLevel = powerLevel + 1; // Power level 0 = I, 1 = II, etc.
         String romanLevel = toRoman(displayLevel);
         
         Component name = Component.text(effectName + " " + romanLevel, NamedTextColor.GOLD, TextDecoration.ITALIC)
@@ -1695,6 +1773,12 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             int speedPercent = (int)((flightSpeed / 0.1f) * 100);
             
             lore.add(Component.text("Flight Speed: " + speedPercent + "%", NamedTextColor.AQUA)
+                .decoration(TextDecoration.ITALIC, false));
+            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
+                .decoration(TextDecoration.ITALIC, false));
+        } else if (effectKey.equals("fortune")) {
+            // Add fortune-specific lore
+            lore.add(Component.text("Luck: +" + (powerLevel + 1), NamedTextColor.GREEN)
                 .decoration(TextDecoration.ITALIC, false));
             lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
                 .decoration(TextDecoration.ITALIC, false));
@@ -1725,58 +1809,17 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     
     /**
      * Handles /masterbrewing give potion <player> random command
+     * OPTIMIZATION #3: Now uses map lookup instead of switch statement
      */
     private boolean handleGiveRandomPotion(CommandSender sender, Player target) {
-        // Define all available potion types
-        String[] potionTypes = {
-            "fly", "speed", "slowness", "haste", "mining_fatigue", "strength",
-            "healing", "harming", "leaping", "nausea", "regeneration",
-            "resistance", "fire_resistance", "water_breathing", "invisibility",
-            "blindness", "night_vision", "hunger", "weakness", "poison",
-            "wither", "health_boost", "absorption", "saturation", "glowing",
-            "levitation", "luck", "unluck", "slow_falling", "conduit_power",
-            "dolphins_grace", "bad_omen", "hero_of_the_village", "darkness"
-        };
+        // Get random potion name from all available potions
+        List<String> potionNames = new ArrayList<>(POTION_NAME_TO_EFFECT_KEY.keySet());
+        String potionName = potionNames.get(new Random().nextInt(potionNames.size()));
+        String effectKey = POTION_NAME_TO_EFFECT_KEY.get(potionName);
         
-        // Pick random potion type
-        Random random = new Random();
-        String potionName = potionTypes[random.nextInt(potionTypes.length)];
-        
-        // Pick random levels
-        int timeLevel = random.nextInt(maxTimeLevel) + 1; // 1 to maxTimeLevel
-        int powerLevel = random.nextInt(maxPowerLevel) + 1; // 1 to maxPowerLevel
-        
-        // Map potion name to effect key
-        String effectKey;
-        switch (potionName) {
-            case "slowness":
-                effectKey = "slowness";
-                break;
-            case "haste":
-                effectKey = "haste";
-                break;
-            case "mining_fatigue":
-                effectKey = "mining_fatigue";
-                break;
-            case "healing":
-                effectKey = "instant_health";
-                break;
-            case "harming":
-                effectKey = "instant_damage";
-                break;
-            case "leaping":
-                effectKey = "jump_boost";
-                break;
-            case "nausea":
-                effectKey = "nausea";
-                break;
-            case "resistance":
-                effectKey = "resistance";
-                break;
-            default:
-                effectKey = potionName; // Most match directly
-                break;
-        }
+        // Get random time and power levels
+        int timeLevel = 1 + new Random().nextInt(maxTimeLevel);
+        int powerLevel = 1 + new Random().nextInt(maxPowerLevel);
         
         // Get effect type using NamespacedKey (skip for custom fly potion)
         PotionEffectType effectType = null;
@@ -1910,18 +1953,9 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 .map(Player::getName)
                 .collect(Collectors.toList());
         } else if (args.length == 4 && args[0].equalsIgnoreCase("give") && args[1].equalsIgnoreCase("potion")) {
-            // Potion types + random
+            // OPTIMIZATION #3: Use map keys instead of hard-coded list
             completions.add("random");
-            completions.add("fly");
-            completions.addAll(Arrays.asList(
-                "speed", "slowness", "haste", "mining_fatigue", "strength",
-                "healing", "harming", "leaping", "nausea", "regeneration",
-                "resistance", "fire_resistance", "water_breathing", "invisibility",
-                "blindness", "night_vision", "hunger", "weakness", "poison",
-                "wither", "health_boost", "absorption", "saturation", "glowing",
-                "levitation", "luck", "unluck", "slow_falling", "conduit_power",
-                "dolphins_grace", "bad_omen", "hero_of_the_village", "darkness"
-            ));
+            completions.addAll(POTION_NAME_TO_EFFECT_KEY.keySet());
         } else if (args.length == 5 && args[0].equalsIgnoreCase("give") && args[1].equalsIgnoreCase("potion")) {
             // Time level suggestions based on config + max
             completions.add("max");

@@ -41,6 +41,7 @@ import org.bukkit.potion.PotionType;
 import java.io.File;
 import java.util.*;
 import java.util.stream.Collectors;
+import com.google.gson.Gson;
 
 /**
  * MasterBrewing Plugin
@@ -79,9 +80,13 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     private NamespacedKey potionEffectTypeKey;
     private NamespacedKey masterPotionKey;
     
-    // OPTIMIZATION #1: Store locations as strings for O(1) lookup without object allocation
-    // Format: "world,x,y,z"
-    private Set<String> masterBrewingStandLocations = new HashSet<>();
+    // Brewing stand state keys
+    private NamespacedKey brewingSlot0Key;
+    private NamespacedKey brewingSlot1Key;
+    private NamespacedKey brewingSlot2Key;
+    private NamespacedKey brewingSlot3Key;
+    private NamespacedKey brewingSlot4Key;
+    private NamespacedKey brewingFuelLevelKey;
     
     // Track active master potion effects per player
     // Map: Player UUID -> List of active effects with expiry times
@@ -146,9 +151,6 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         return Collections.unmodifiableMap(map);
     }
     
-    // OPTIMIZATION #4: Dirty flags for file I/O optimization
-    private volatile boolean standLocationsDirty = false;
-    
     /**
      * Inner class to track active master potion effects
      */
@@ -182,12 +184,19 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         potionEffectTypeKey = new NamespacedKey(this, "potion_effect_type");
         masterPotionKey = new NamespacedKey(this, "master_potion");
         
+        // Initialize brewing stand state keys
+        brewingSlot0Key = new NamespacedKey(this, "brewing_slot_0");
+        brewingSlot1Key = new NamespacedKey(this, "brewing_slot_1");
+        brewingSlot2Key = new NamespacedKey(this, "brewing_slot_2");
+        brewingSlot3Key = new NamespacedKey(this, "brewing_slot_3");
+        brewingSlot4Key = new NamespacedKey(this, "brewing_slot_4");
+        brewingFuelLevelKey = new NamespacedKey(this, "brewing_fuel_level");
+        
         // Save default config and load upgrade tiers
         saveDefaultConfig();
         loadUpgradeTiers();
         
         // Load saved master brewing stand locations
-        loadMasterBrewingStandLocations();
         
         // Register events and commands
         getServer().getPluginManager().registerEvents(this, this);
@@ -207,11 +216,6 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     
     @Override
     public void onDisable() {
-        // OPTIMIZATION #4: Save stand locations only if dirty
-        if (standLocationsDirty) {
-            saveMasterBrewingStandLocations();
-        }
-        
         // Save all active player effects
         for (UUID uuid : activeMasterEffects.keySet()) {
             List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
@@ -219,76 +223,6 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         }
         
         getLogger().info("MasterBrewing plugin disabled!");
-    }
-    
-    /**
-     * Saves master brewing stand locations to stands.yml
-     * OPTIMIZATION #4: Now async with dirty flag
-     */
-    private void saveMasterBrewingStandLocations() {
-        // OPTIMIZATION #4: Run file I/O asynchronously
-        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
-            File standsFile = new File(getDataFolder(), "stands.yml");
-            FileConfiguration standsConfig = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(standsFile);
-            
-            // OPTIMIZATION #1: Convert Set<String> directly to List<String>
-            List<String> locations = new ArrayList<>(masterBrewingStandLocations);
-            
-            standsConfig.set("master-brewing-stands", locations);
-            
-            try {
-                standsConfig.save(standsFile);
-                getLogger().info("Saved " + locations.size() + " master brewing stand locations to stands.yml");
-                standLocationsDirty = false;
-            } catch (Exception e) {
-                getLogger().warning("Failed to save master brewing stand locations: " + e.getMessage());
-            }
-        });
-    }
-    
-    /**
-     * Loads master brewing stand locations from stands.yml
-     * OPTIMIZATION #1: Now loads into String set
-     */
-    private void loadMasterBrewingStandLocations() {
-        masterBrewingStandLocations.clear();
-        
-        File standsFile = new File(getDataFolder(), "stands.yml");
-        if (!standsFile.exists()) {
-            getLogger().info("No stands.yml found, starting fresh");
-            return;
-        }
-        
-        FileConfiguration standsConfig = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(standsFile);
-        List<String> locations = standsConfig.getStringList("master-brewing-stands");
-        int loaded = 0;
-        
-        for (String locString : locations) {
-            try {
-                String[] parts = locString.split(",");
-                if (parts.length != 4) continue;
-                
-                World world = Bukkit.getWorld(parts[0]);
-                if (world == null) continue;
-                
-                int x = Integer.parseInt(parts[1]);
-                int y = Integer.parseInt(parts[2]);
-                int z = Integer.parseInt(parts[3]);
-                
-                Location loc = new Location(world, x, y, z);
-                
-                // Verify the block is still a brewing stand
-                if (loc.getBlock().getType() == Material.BREWING_STAND) {
-                    // OPTIMIZATION #1: Add string directly to set
-                    masterBrewingStandLocations.add(locString);
-                    loaded++;
-                }
-            } catch (Exception e) {
-                getLogger().warning("Failed to load master brewing stand location: " + locString);
-            }
-        }
-        
-        getLogger().info("Loaded " + loaded + " master brewing stand locations from stands.yml");
     }
     
     /**
@@ -538,20 +472,6 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
      * Checks if a location has a Master Brewing Stand
      * OPTIMIZATION #1: Now uses string-based lookup
      */
-    private boolean isMasterBrewingStandLocation(Location loc) {
-        String locKey = locationToString(loc);
-        return masterBrewingStandLocations.contains(locKey);
-    }
-    
-    /**
-     * OPTIMIZATION #1: Converts location to string key for storage
-     */
-    private String locationToString(Location loc) {
-        return loc.getWorld().getName() + "," + 
-               loc.getBlockX() + "," + 
-               loc.getBlockY() + "," + 
-               loc.getBlockZ();
-    }
     
     // ==================== EVENT HANDLERS ====================
     
@@ -564,11 +484,118 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         ItemStack item = event.getItemInHand();
         
         if (isMasterBrewingStand(item)) {
-            Location loc = event.getBlock().getLocation();
-            // OPTIMIZATION #1: Add string key instead of Location object
-            masterBrewingStandLocations.add(locationToString(loc));
-            // OPTIMIZATION #4: Mark as dirty
-            standLocationsDirty = true;
+            Block block = event.getBlock();
+            
+            // Check if the item has saved brewing stand state
+            ItemMeta itemMeta = item.getItemMeta();
+            
+            // Mark the brewing stand block itself with NBT and restore fuel level after 1 tick
+            Bukkit.getScheduler().runTaskLater(this, () -> {
+                // Verify the block is still a brewing stand
+                if (block.getType() == Material.BREWING_STAND) {
+                    BrewingStand brewingStand = (BrewingStand) block.getState();
+                    
+                    // Mark this block as a master brewing stand
+                    brewingStand.getPersistentDataContainer().set(masterBrewingStandKey, PersistentDataType.BYTE, (byte) 1);
+                    
+                    // Restore fuel level to the state
+                    if (itemMeta != null && itemMeta.getPersistentDataContainer().has(brewingFuelLevelKey, PersistentDataType.INTEGER)) {
+                        int fuelLevel = itemMeta.getPersistentDataContainer().get(brewingFuelLevelKey, PersistentDataType.INTEGER);
+                        brewingStand.setFuelLevel(fuelLevel);
+                        getLogger().info("Restoring fuel level: " + fuelLevel);
+                    }
+                    
+                    // Update the block state (writes NBT and fuel level)
+                    brewingStand.update();
+                    
+                    // NOW restore inventory items after the state is updated
+                    if (itemMeta != null) {
+                        // Get a fresh reference to the inventory after updating
+                        BrewingStand updatedStand = (BrewingStand) block.getState();
+                        BrewerInventory inventory = updatedStand.getInventory();
+                        
+                        // Restore inventory slots
+                        Gson gson = new Gson();
+                        
+                        getLogger().info("=== RESTORING BREWING STAND STATE ===");
+                        getLogger().info("Has slot 0 data: " + itemMeta.getPersistentDataContainer().has(brewingSlot0Key, PersistentDataType.STRING));
+                        getLogger().info("Has slot 1 data: " + itemMeta.getPersistentDataContainer().has(brewingSlot1Key, PersistentDataType.STRING));
+                        getLogger().info("Has slot 2 data: " + itemMeta.getPersistentDataContainer().has(brewingSlot2Key, PersistentDataType.STRING));
+                        getLogger().info("Has slot 3 data: " + itemMeta.getPersistentDataContainer().has(brewingSlot3Key, PersistentDataType.STRING));
+                        getLogger().info("Has slot 4 data: " + itemMeta.getPersistentDataContainer().has(brewingSlot4Key, PersistentDataType.STRING));
+                        
+                        if (itemMeta.getPersistentDataContainer().has(brewingSlot0Key, PersistentDataType.STRING)) {
+                            String json = itemMeta.getPersistentDataContainer().get(brewingSlot0Key, PersistentDataType.STRING);
+                            getLogger().info("Slot 0 JSON length on restore: " + json.length());
+                            try {
+                                Map<String, Object> map = gson.fromJson(json, Map.class);
+                                ItemStack restored = ItemStack.deserialize(map);
+                                inventory.setItem(0, restored);
+                                getLogger().info("Slot 0 restored: " + restored.getType());
+                            } catch (Exception e) {
+                                getLogger().warning("Failed to restore brewing stand slot 0: " + e.getMessage());
+                                e.printStackTrace();
+                            }
+                        }
+                        
+                        if (itemMeta.getPersistentDataContainer().has(brewingSlot1Key, PersistentDataType.STRING)) {
+                            String json = itemMeta.getPersistentDataContainer().get(brewingSlot1Key, PersistentDataType.STRING);
+                            getLogger().info("Slot 1 JSON length on restore: " + json.length());
+                            try {
+                                Map<String, Object> map = gson.fromJson(json, Map.class);
+                                ItemStack restored = ItemStack.deserialize(map);
+                                inventory.setItem(1, restored);
+                                getLogger().info("Slot 1 restored: " + restored.getType());
+                            } catch (Exception e) {
+                                getLogger().warning("Failed to restore brewing stand slot 1: " + e.getMessage());
+                                e.printStackTrace();
+                            }
+                        }
+                        
+                        if (itemMeta.getPersistentDataContainer().has(brewingSlot2Key, PersistentDataType.STRING)) {
+                            String json = itemMeta.getPersistentDataContainer().get(brewingSlot2Key, PersistentDataType.STRING);
+                            getLogger().info("Slot 2 JSON length on restore: " + json.length());
+                            try {
+                                Map<String, Object> map = gson.fromJson(json, Map.class);
+                                ItemStack restored = ItemStack.deserialize(map);
+                                inventory.setItem(2, restored);
+                                getLogger().info("Slot 2 restored: " + restored.getType());
+                            } catch (Exception e) {
+                                getLogger().warning("Failed to restore brewing stand slot 2: " + e.getMessage());
+                                e.printStackTrace();
+                            }
+                        }
+                        
+                        if (itemMeta.getPersistentDataContainer().has(brewingSlot3Key, PersistentDataType.STRING)) {
+                            String json = itemMeta.getPersistentDataContainer().get(brewingSlot3Key, PersistentDataType.STRING);
+                            getLogger().info("Slot 3 JSON length on restore: " + json.length());
+                            try {
+                                Map<String, Object> map = gson.fromJson(json, Map.class);
+                                ItemStack restored = ItemStack.deserialize(map);
+                                inventory.setItem(3, restored);
+                                getLogger().info("Slot 3 restored: " + restored.getType());
+                            } catch (Exception e) {
+                                getLogger().warning("Failed to restore brewing stand slot 3: " + e.getMessage());
+                                e.printStackTrace();
+                            }
+                        }
+                        
+                        if (itemMeta.getPersistentDataContainer().has(brewingSlot4Key, PersistentDataType.STRING)) {
+                            String json = itemMeta.getPersistentDataContainer().get(brewingSlot4Key, PersistentDataType.STRING);
+                            getLogger().info("Slot 4 JSON length on restore: " + json.length());
+                            try {
+                                Map<String, Object> map = gson.fromJson(json, Map.class);
+                                ItemStack restored = ItemStack.deserialize(map);
+                                inventory.setItem(4, restored);
+                                getLogger().info("Slot 4 restored: " + restored.getType());
+                            } catch (Exception e) {
+                                getLogger().warning("Failed to restore brewing stand slot 4: " + e.getMessage());
+                                e.printStackTrace();
+                            }
+                        }
+                    }
+                }
+            }, 1L);
             
             event.getPlayer().sendMessage(Component.text("Master Brewing Stand placed!", NamedTextColor.GREEN));
         }
@@ -576,26 +603,107 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     
     /**
      * Handles breaking Master Brewing Stands
-     * OPTIMIZATION #1: Now removes location by string
+     * Prevents duplicate drops when using SpecialBooks auto-pickup tools
      */
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.LOWEST)
     public void onBlockBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
         
         if (block.getType() == Material.BREWING_STAND) {
-            Location loc = block.getLocation();
+            BrewingStand brewingStand = (BrewingStand) block.getState();
             
-            if (isMasterBrewingStandLocation(loc)) {
-                // OPTIMIZATION #1: Remove string key instead of Location object
-                masterBrewingStandLocations.remove(locationToString(loc));
-                // OPTIMIZATION #4: Mark as dirty
-                standLocationsDirty = true;
+            // Check if this brewing stand is marked as a master brewing stand
+            if (brewingStand.getPersistentDataContainer().has(masterBrewingStandKey, PersistentDataType.BYTE)) {
+                // Get brewing stand state before breaking
+                BrewerInventory inventory = brewingStand.getInventory();
+                int fuelLevel = brewingStand.getFuelLevel();
                 
-                // Drop Master Brewing Stand item
-                event.setDropItems(false);
-                block.getWorld().dropItemNaturally(loc, createMasterBrewingStand());
+                // Cancel event to prevent SpecialBooks from adding vanilla drop
+                event.setCancelled(true);
                 
-                event.getPlayer().sendMessage(Component.text("Master Brewing Stand broken!", NamedTextColor.YELLOW));
+                Player player = event.getPlayer();
+                ItemStack tool = player.getInventory().getItemInMainHand();
+                ItemStack masterStand = createMasterBrewingStand();
+                
+                // Save brewing stand state to the item's NBT
+                ItemMeta standMeta = masterStand.getItemMeta();
+                
+                // Save each inventory slot (0-4: three potion slots, ingredient slot, fuel slot)
+                Gson gson = new Gson();
+                ItemStack slot0 = inventory.getItem(0);
+                ItemStack slot1 = inventory.getItem(1);
+                ItemStack slot2 = inventory.getItem(2);
+                ItemStack slot3 = inventory.getItem(3);
+                ItemStack slot4 = inventory.getItem(4);
+                
+                getLogger().info("=== SAVING BREWING STAND STATE ===");
+                getLogger().info("Slot 0: " + (slot0 != null ? slot0.getType() : "null"));
+                getLogger().info("Slot 1: " + (slot1 != null ? slot1.getType() : "null"));
+                getLogger().info("Slot 2: " + (slot2 != null ? slot2.getType() : "null"));
+                getLogger().info("Slot 3: " + (slot3 != null ? slot3.getType() : "null"));
+                getLogger().info("Slot 4: " + (slot4 != null ? slot4.getType() : "null"));
+                
+                if (slot0 != null && slot0.getType() != Material.AIR) {
+                    String json = gson.toJson(slot0.serialize());
+                    getLogger().info("Slot 0 JSON length: " + json.length());
+                    standMeta.getPersistentDataContainer().set(brewingSlot0Key, PersistentDataType.STRING, json);
+                }
+                if (slot1 != null && slot1.getType() != Material.AIR) {
+                    String json = gson.toJson(slot1.serialize());
+                    getLogger().info("Slot 1 JSON length: " + json.length());
+                    standMeta.getPersistentDataContainer().set(brewingSlot1Key, PersistentDataType.STRING, json);
+                }
+                if (slot2 != null && slot2.getType() != Material.AIR) {
+                    String json = gson.toJson(slot2.serialize());
+                    getLogger().info("Slot 2 JSON length: " + json.length());
+                    standMeta.getPersistentDataContainer().set(brewingSlot2Key, PersistentDataType.STRING, json);
+                }
+                if (slot3 != null && slot3.getType() != Material.AIR) {
+                    String json = gson.toJson(slot3.serialize());
+                    getLogger().info("Slot 3 JSON length: " + json.length());
+                    standMeta.getPersistentDataContainer().set(brewingSlot3Key, PersistentDataType.STRING, json);
+                }
+                if (slot4 != null && slot4.getType() != Material.AIR) {
+                    String json = gson.toJson(slot4.serialize());
+                    getLogger().info("Slot 4 JSON length: " + json.length());
+                    standMeta.getPersistentDataContainer().set(brewingSlot4Key, PersistentDataType.STRING, json);
+                }
+                
+                // Save fuel level
+                if (fuelLevel > 0) {
+                    standMeta.getPersistentDataContainer().set(brewingFuelLevelKey, PersistentDataType.INTEGER, fuelLevel);
+                }
+                
+                masterStand.setItemMeta(standMeta);
+                
+                // Check if tool has auto-pickup from SpecialBooks
+                boolean hasAutoPickup = false;
+                if (tool != null && tool.hasItemMeta()) {
+                    ItemMeta meta = tool.getItemMeta();
+                    // SpecialBooks uses "specialbooks" namespace
+                    NamespacedKey autoPickupKey = new NamespacedKey("specialbooks", "auto_pickup");
+                    hasAutoPickup = meta.getPersistentDataContainer().has(autoPickupKey, PersistentDataType.BYTE);
+                }
+                
+                // Manually break the block
+                block.setType(Material.AIR);
+                
+                // Handle the drop based on auto-pickup
+                if (hasAutoPickup) {
+                    // Add directly to inventory (mimics SpecialBooks behavior)
+                    HashMap<Integer, ItemStack> leftover = player.getInventory().addItem(masterStand);
+                    // Drop overflow at player location if inventory is full
+                    if (!leftover.isEmpty()) {
+                        for (ItemStack overflow : leftover.values()) {
+                            player.getWorld().dropItemNaturally(player.getLocation(), overflow);
+                        }
+                    }
+                } else {
+                    // Drop naturally at block location
+                    block.getWorld().dropItemNaturally(block.getLocation(), masterStand);
+                }
+                
+                player.sendMessage(Component.text("Master Brewing Stand broken!", NamedTextColor.YELLOW));
             }
         }
     }
@@ -606,10 +714,10 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBrew(BrewEvent event) {
         Block block = event.getBlock();
-        Location loc = block.getLocation();
         
-        // Only handle master brewing stands
-        if (!isMasterBrewingStandLocation(loc)) {
+        // Check if this is a master brewing stand by reading block NBT
+        BrewingStand brewingStand = (BrewingStand) block.getState();
+        if (!brewingStand.getPersistentDataContainer().has(masterBrewingStandKey, PersistentDataType.BYTE)) {
             return;
         }
         

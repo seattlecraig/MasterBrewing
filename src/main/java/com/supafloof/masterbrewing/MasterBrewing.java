@@ -99,6 +99,10 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     // Map: level -> glowstone cost
     private Map<Integer, Integer> powerUpgrades = new TreeMap<>();
     
+    // Per-potion upgrade paths (effect key -> UpgradePath)
+    // If a potion isn't in this map, use the default timeUpgrades/powerUpgrades
+    private Map<String, UpgradePath> potionUpgradePaths = new HashMap<>();
+    
     // Max levels based on config
     private int maxTimeLevel = 0;
     private int maxPowerLevel = 0;
@@ -149,6 +153,23 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         map.put("hero_of_the_village", "hero_of_the_village");
         map.put("darkness", "darkness");
         return Collections.unmodifiableMap(map);
+    }
+    
+    /**
+     * Inner class to hold upgrade paths for a specific potion type
+     */
+    private static class UpgradePath {
+        Map<Integer, int[]> timeUpgrades; // level -> [redstone cost, duration seconds]
+        Map<Integer, Integer> powerUpgrades; // level -> glowstone cost
+        int maxTimeLevel;
+        int maxPowerLevel;
+        
+        UpgradePath(Map<Integer, int[]> timeUpgrades, Map<Integer, Integer> powerUpgrades) {
+            this.timeUpgrades = timeUpgrades;
+            this.powerUpgrades = powerUpgrades;
+            this.maxTimeLevel = timeUpgrades.isEmpty() ? 0 : Collections.max(timeUpgrades.keySet());
+            this.maxPowerLevel = powerUpgrades.isEmpty() ? 0 : Collections.max(powerUpgrades.keySet());
+        }
     }
     
     /**
@@ -277,8 +298,126 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             }
         }
         
+        // Load per-potion upgrade overrides
+        potionUpgradePaths.clear();
+        Set<String> configKeys = config.getKeys(false);
+        
+        for (String key : configKeys) {
+            // Skip the default upgrade sections
+            if (key.equals("upgrade-time") || key.equals("upgrade-power")) {
+                continue;
+            }
+            
+            // Check if this is a valid potion type from our map
+            if (!POTION_NAME_TO_EFFECT_KEY.containsKey(key)) {
+                continue;
+            }
+            
+            String effectKey = POTION_NAME_TO_EFFECT_KEY.get(key);
+            
+            // Load this potion's time upgrades (or use defaults)
+            Map<Integer, int[]> potionTimeUpgrades = new TreeMap<>();
+            if (config.contains(key + ".upgrade-time")) {
+                List<String> potionTimeConfigs = config.getStringList(key + ".upgrade-time");
+                for (String entry : potionTimeConfigs) {
+                    try {
+                        String[] parts = entry.split(",");
+                        if (parts.length != 3) {
+                            getLogger().warning("Invalid " + key + ".upgrade-time entry: " + entry);
+                            continue;
+                        }
+                        
+                        int level = Integer.parseInt(parts[0].trim());
+                        int redstoneCost = Integer.parseInt(parts[1].trim());
+                        int duration = Integer.parseInt(parts[2].trim());
+                        
+                        potionTimeUpgrades.put(level, new int[]{redstoneCost, duration});
+                    } catch (Exception e) {
+                        getLogger().warning("Failed to parse " + key + ".upgrade-time entry: " + entry);
+                    }
+                }
+            } else {
+                // Use default time upgrades
+                potionTimeUpgrades.putAll(timeUpgrades);
+            }
+            
+            // Load this potion's power upgrades (or use defaults)
+            Map<Integer, Integer> potionPowerUpgrades = new TreeMap<>();
+            if (config.contains(key + ".upgrade-power")) {
+                List<String> potionPowerConfigs = config.getStringList(key + ".upgrade-power");
+                for (String entry : potionPowerConfigs) {
+                    try {
+                        String[] parts = entry.split(",");
+                        if (parts.length != 2) {
+                            getLogger().warning("Invalid " + key + ".upgrade-power entry: " + entry);
+                            continue;
+                        }
+                        
+                        int level = Integer.parseInt(parts[0].trim());
+                        int glowstoneCost = Integer.parseInt(parts[1].trim());
+                        
+                        potionPowerUpgrades.put(level, glowstoneCost);
+                    } catch (Exception e) {
+                        getLogger().warning("Failed to parse " + key + ".upgrade-power entry: " + entry);
+                    }
+                }
+            } else {
+                // Use default power upgrades
+                potionPowerUpgrades.putAll(powerUpgrades);
+            }
+            
+            // Create and store the upgrade path for this potion
+            if (!potionTimeUpgrades.isEmpty() || !potionPowerUpgrades.isEmpty()) {
+                UpgradePath path = new UpgradePath(potionTimeUpgrades, potionPowerUpgrades);
+                potionUpgradePaths.put(effectKey, path);
+                getLogger().info("Loaded custom upgrade path for " + key + " (time levels: " + path.maxTimeLevel + ", power levels: " + path.maxPowerLevel + ")");
+            }
+        }
+        
         getLogger().info("Loaded " + timeUpgrades.size() + " time upgrades (max level: " + maxTimeLevel + ")");
         getLogger().info("Loaded " + powerUpgrades.size() + " power upgrades (max level: " + maxPowerLevel + ")");
+    }
+    
+    /**
+     * Gets the time upgrade map for a specific potion type
+     * Returns the potion-specific upgrade path if it exists, otherwise returns the default
+     */
+    private Map<Integer, int[]> getTimeUpgrades(String effectKey) {
+        if (potionUpgradePaths.containsKey(effectKey)) {
+            return potionUpgradePaths.get(effectKey).timeUpgrades;
+        }
+        return timeUpgrades;
+    }
+    
+    /**
+     * Gets the power upgrade map for a specific potion type
+     * Returns the potion-specific upgrade path if it exists, otherwise returns the default
+     */
+    private Map<Integer, Integer> getPowerUpgrades(String effectKey) {
+        if (potionUpgradePaths.containsKey(effectKey)) {
+            return potionUpgradePaths.get(effectKey).powerUpgrades;
+        }
+        return powerUpgrades;
+    }
+    
+    /**
+     * Gets the max time level for a specific potion type
+     */
+    private int getMaxTimeLevel(String effectKey) {
+        if (potionUpgradePaths.containsKey(effectKey)) {
+            return potionUpgradePaths.get(effectKey).maxTimeLevel;
+        }
+        return maxTimeLevel;
+    }
+    
+    /**
+     * Gets the max power level for a specific potion type
+     */
+    private int getMaxPowerLevel(String effectKey) {
+        if (potionUpgradePaths.containsKey(effectKey)) {
+            return potionUpgradePaths.get(effectKey).maxPowerLevel;
+        }
+        return maxPowerLevel;
     }
     
     /**
@@ -802,34 +941,44 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 effectTypeKey = effectType.getKey().getKey();
             }
             
-            // Calculate material cost from FIRST valid potion only
-            if (potionsToUpgrade.isEmpty()) {
-                if (isRedstone) {
-                    int nextLevel = currentTimeLevel + 1;
-                    if (nextLevel > maxTimeLevel) {
-                        continue; // Max level reached
+            // Check if this potion can be upgraded
+            boolean canUpgrade = false;
+            
+            if (isRedstone) {
+                int nextLevel = currentTimeLevel + 1;
+                int potionMaxTimeLevel = getMaxTimeLevel(effectTypeKey);
+                if (nextLevel <= potionMaxTimeLevel) {
+                    Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectTypeKey);
+                    int[] upgrade = potionTimeUpgrades.get(nextLevel);
+                    if (upgrade != null) {
+                        canUpgrade = true;
+                        // Calculate material cost from FIRST valid potion only
+                        if (potionsToUpgrade.isEmpty()) {
+                            materialCost = upgrade[0];
+                            upgradeDuration = upgrade[1];
+                        }
                     }
-                    
-                    int[] upgrade = timeUpgrades.get(nextLevel);
-                    if (upgrade == null) continue;
-                    
-                    materialCost = upgrade[0];
-                    upgradeDuration = upgrade[1];
-                    
-                } else if (isGlowstone) {
-                    int nextLevel = currentPowerLevel + 1;
-                    if (nextLevel > maxPowerLevel) {
-                        continue; // Max level reached
+                }
+            } else if (isGlowstone) {
+                int nextLevel = currentPowerLevel + 1;
+                int potionMaxPowerLevel = getMaxPowerLevel(effectTypeKey);
+                if (nextLevel <= potionMaxPowerLevel) {
+                    Map<Integer, Integer> potionPowerUpgrades = getPowerUpgrades(effectTypeKey);
+                    Integer glowstoneCost = potionPowerUpgrades.get(nextLevel);
+                    if (glowstoneCost != null) {
+                        canUpgrade = true;
+                        // Calculate material cost from FIRST valid potion only
+                        if (potionsToUpgrade.isEmpty()) {
+                            materialCost = glowstoneCost;
+                        }
                     }
-                    
-                    Integer glowstoneCost = powerUpgrades.get(nextLevel);
-                    if (glowstoneCost == null) continue;
-                    
-                    materialCost = glowstoneCost;
                 }
             }
             
-            potionsToUpgrade.add(potion);
+            // Only add to upgrade list if it can actually be upgraded
+            if (canUpgrade) {
+                potionsToUpgrade.add(potion);
+            }
         }
         
         // Check if we have any potions to upgrade
@@ -897,7 +1046,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             }
         } else {
             // Use config duration for non-zero levels
-            duration = timeUpgrades.get(newTimeLevel)[1];
+            Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectTypeKey);
+            duration = potionTimeUpgrades.get(newTimeLevel)[1];
         }
         
         // Update duration if this was a time upgrade
@@ -966,6 +1116,20 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         lore.add(Component.text("Master Potion", NamedTextColor.LIGHT_PURPLE)
             .decoration(TextDecoration.ITALIC, false));
         
+        // Get max levels for this potion type
+        int potionMaxPowerLevel = getMaxPowerLevel(effectTypeKey);
+        int potionMaxTimeLevel = getMaxTimeLevel(effectTypeKey);
+        Map<Integer, Integer> potionPowerUpgrades = getPowerUpgrades(effectTypeKey);
+        Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectTypeKey);
+        
+        // Calculate max duration (highest duration value in time upgrades)
+        int maxDuration = 0;
+        for (int[] timeUpgrade : potionTimeUpgrades.values()) {
+            if (timeUpgrade[1] > maxDuration) {
+                maxDuration = timeUpgrade[1];
+            }
+        }
+        
         // Add fly-specific lore
         if (effectTypeKey.equals("fly")) {
             // Calculate flight speed
@@ -973,16 +1137,134 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             flightSpeed = Math.min(flightSpeed, 1.0f);
             int speedPercent = (int)((flightSpeed / 0.1f) * 100);
             
-            lore.add(Component.text("Flight Speed: " + speedPercent + "%", NamedTextColor.AQUA)
-                .decoration(TextDecoration.ITALIC, false));
-            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
-                .decoration(TextDecoration.ITALIC, false));
+            // Check if at max levels
+            boolean atMaxSpeed = newPowerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
+            
+            // Flight speed line
+            if (atMaxSpeed) {
+                lore.add(Component.text("Flight Speed: " + speedPercent + "% (MAX)", NamedTextColor.AQUA)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                // Calculate max speed
+                float maxFlightSpeed = 0.1f * (1.0f + (potionMaxPowerLevel * 0.2f));
+                maxFlightSpeed = Math.min(maxFlightSpeed, 1.0f);
+                int maxSpeedPercent = (int)((maxFlightSpeed / 0.1f) * 100);
+                lore.add(Component.text("Flight Speed: " + speedPercent + "% (Max: " + maxSpeedPercent + "%)", NamedTextColor.AQUA)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Duration line
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Add upgrade cost lines if not at max
+            if (!atMaxSpeed) {
+                int nextPowerLevel = newPowerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text("Flight Speed Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = newTimeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
         } else if (effectTypeKey.equals("fortune")) {
-            // Add fortune-specific lore
-            lore.add(Component.text("Luck: +" + (newPowerLevel + 1), NamedTextColor.GREEN)
-                .decoration(TextDecoration.ITALIC, false));
-            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
-                .decoration(TextDecoration.ITALIC, false));
+            // Check if at max levels
+            boolean atMaxLuck = newPowerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
+            
+            // Luck line
+            if (atMaxLuck) {
+                lore.add(Component.text("Luck: +" + (newPowerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Luck: +" + (newPowerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Duration line
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Add upgrade cost lines if not at max
+            if (!atMaxLuck) {
+                int nextPowerLevel = newPowerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text("Luck Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = newTimeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+        } else {
+            // Standard potion lore (for vanilla effects like speed, strength, etc.)
+            boolean atMaxPower = newPowerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
+            
+            // Power line
+            String powerLabel = effectName;
+            if (atMaxPower) {
+                lore.add(Component.text(powerLabel + ": +" + (newPowerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text(powerLabel + ": +" + (newPowerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Duration line
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Add upgrade cost lines if not at max
+            if (!atMaxPower) {
+                int nextPowerLevel = newPowerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text(powerLabel + " Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = newTimeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
         }
         
         meta.lore(lore);
@@ -990,12 +1272,13 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         potion.setItemMeta(meta);
     }
         
-        // Consume materials
+        // Consume materials - must use setIngredient to update the actual inventory
         int newAmount = ingredient.getAmount() - materialCost;
         if (newAmount <= 0) {
             inv.setIngredient(null);
         } else {
             ingredient.setAmount(newAmount);
+            inv.setIngredient(ingredient); // Actually update the brewing stand inventory
         }
     }
     
@@ -1746,6 +2029,10 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         int timeLevel;
         int powerLevel;
         
+        // Need to get max levels for this specific potion for the max variant
+        int potionMaxTimeLevel = getMaxTimeLevel(effectKey);
+        int potionMaxPowerLevel = getMaxPowerLevel(effectKey);
+        
         if (useDefaults) {
             // Special case: fly and fortune default to 0,0 (base power, 3 min duration)
             if (potionName.equals("fly") || potionName.equals("fortune")) {
@@ -1756,8 +2043,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 powerLevel = 1;
             }
         } else if (isMaxVariant) {
-            timeLevel = maxTimeLevel;
-            powerLevel = maxPowerLevel;
+            timeLevel = potionMaxTimeLevel;
+            powerLevel = potionMaxPowerLevel;
         } else {
             try {
                 // If only one level provided, use it for both time and power
@@ -1788,13 +2075,17 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             return true;
         }
         
-        if (timeLevel > maxTimeLevel) {
-            sender.sendMessage(Component.text("Time level cannot exceed " + maxTimeLevel + "!", NamedTextColor.RED));
+        // Use the already-declared potionMaxTimeLevel and potionMaxPowerLevel from above
+        Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectKey);
+        Map<Integer, Integer> potionPowerUpgrades = getPowerUpgrades(effectKey);
+        
+        if (timeLevel > potionMaxTimeLevel) {
+            sender.sendMessage(Component.text("Time level cannot exceed " + potionMaxTimeLevel + " for " + potionName + "!", NamedTextColor.RED));
             return true;
         }
         
-        if (powerLevel > maxPowerLevel) {
-            sender.sendMessage(Component.text("Power level cannot exceed " + maxPowerLevel + "!", NamedTextColor.RED));
+        if (powerLevel > potionMaxPowerLevel) {
+            sender.sendMessage(Component.text("Power level cannot exceed " + potionMaxPowerLevel + " for " + potionName + "!", NamedTextColor.RED));
             return true;
         }
         
@@ -1804,17 +2095,17 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             // Custom potions at level 0 have 3 minute (180 second) duration
             duration = 180;
         } else {
-            if (!timeUpgrades.containsKey(timeLevel)) {
-                sender.sendMessage(Component.text("Invalid time level: " + timeLevel + "! Valid levels are 1-" + maxTimeLevel, NamedTextColor.RED));
+            if (!potionTimeUpgrades.containsKey(timeLevel)) {
+                sender.sendMessage(Component.text("Invalid time level: " + timeLevel + "! Valid levels are 1-" + potionMaxTimeLevel, NamedTextColor.RED));
                 return true;
             }
-            duration = timeUpgrades.get(timeLevel)[1];
+            duration = potionTimeUpgrades.get(timeLevel)[1];
         }
         
         // Validate power level exists in config (skip for custom potions at level 0)
         if (!((potionName.equals("fly") || potionName.equals("fortune")) && powerLevel == 0)) {
-            if (!powerUpgrades.containsKey(powerLevel)) {
-                sender.sendMessage(Component.text("Invalid power level: " + powerLevel + "! Valid levels are 1-" + maxPowerLevel, NamedTextColor.RED));
+            if (!potionPowerUpgrades.containsKey(powerLevel)) {
+                sender.sendMessage(Component.text("Invalid power level: " + powerLevel + "! Valid levels are 1-" + potionMaxPowerLevel, NamedTextColor.RED));
                 return true;
             }
         }
@@ -1873,6 +2164,14 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         lore.add(Component.text("Master Potion", NamedTextColor.LIGHT_PURPLE)
             .decoration(TextDecoration.ITALIC, false));
         
+        // Calculate max duration (highest duration value in time upgrades)
+        int maxDuration = 0;
+        for (int[] timeUpgrade : potionTimeUpgrades.values()) {
+            if (timeUpgrade[1] > maxDuration) {
+                maxDuration = timeUpgrade[1];
+            }
+        }
+        
         // Add fly-specific lore
         if (effectKey.equals("fly")) {
             // Calculate flight speed
@@ -1880,16 +2179,134 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             flightSpeed = Math.min(flightSpeed, 1.0f);
             int speedPercent = (int)((flightSpeed / 0.1f) * 100);
             
-            lore.add(Component.text("Flight Speed: " + speedPercent + "%", NamedTextColor.AQUA)
-                .decoration(TextDecoration.ITALIC, false));
-            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
-                .decoration(TextDecoration.ITALIC, false));
+            // Check if at max levels
+            boolean atMaxSpeed = powerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = timeLevel >= potionMaxTimeLevel;
+            
+            // Flight speed line
+            if (atMaxSpeed) {
+                lore.add(Component.text("Flight Speed: " + speedPercent + "% (MAX)", NamedTextColor.AQUA)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                // Calculate max speed
+                float maxFlightSpeed = 0.1f * (1.0f + (potionMaxPowerLevel * 0.2f));
+                maxFlightSpeed = Math.min(maxFlightSpeed, 1.0f);
+                int maxSpeedPercent = (int)((maxFlightSpeed / 0.1f) * 100);
+                lore.add(Component.text("Flight Speed: " + speedPercent + "% (Max: " + maxSpeedPercent + "%)", NamedTextColor.AQUA)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Duration line
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Add upgrade cost lines if not at max
+            if (!atMaxSpeed) {
+                int nextPowerLevel = powerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text("Flight Speed Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = timeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
         } else if (effectKey.equals("fortune")) {
-            // Add fortune-specific lore
-            lore.add(Component.text("Luck: +" + (powerLevel + 1), NamedTextColor.GREEN)
-                .decoration(TextDecoration.ITALIC, false));
-            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
-                .decoration(TextDecoration.ITALIC, false));
+            // Check if at max levels
+            boolean atMaxLuck = powerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = timeLevel >= potionMaxTimeLevel;
+            
+            // Luck line
+            if (atMaxLuck) {
+                lore.add(Component.text("Luck: +" + (powerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Luck: +" + (powerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Duration line
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Add upgrade cost lines if not at max
+            if (!atMaxLuck) {
+                int nextPowerLevel = powerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text("Luck Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = timeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+        } else {
+            // Standard potion lore (for vanilla effects like speed, strength, etc.)
+            boolean atMaxPower = powerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = timeLevel >= potionMaxTimeLevel;
+            
+            // Power line
+            String powerLabel = effectName;
+            if (atMaxPower) {
+                lore.add(Component.text(powerLabel + ": +" + (powerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text(powerLabel + ": +" + (powerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Duration line
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Add upgrade cost lines if not at max
+            if (!atMaxPower) {
+                int nextPowerLevel = powerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text(powerLabel + " Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = timeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
         }
         
         meta.lore(lore);
@@ -1925,13 +2342,19 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         String potionName = potionNames.get(new Random().nextInt(potionNames.size()));
         String effectKey = POTION_NAME_TO_EFFECT_KEY.get(potionName);
         
-        // Get random time and power levels
-        int timeLevel = 1 + new Random().nextInt(maxTimeLevel);
-        int powerLevel = 1 + new Random().nextInt(maxPowerLevel);
+        // Get per-potion upgrade paths
+        int potionMaxTimeLevel = getMaxTimeLevel(effectKey);
+        int potionMaxPowerLevel = getMaxPowerLevel(effectKey);
+        Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectKey);
+        Map<Integer, Integer> potionPowerUpgrades = getPowerUpgrades(effectKey);
         
-        // Get effect type using NamespacedKey (skip for custom fly potion)
+        // Get random time and power levels based on this potion's max levels
+        int timeLevel = 1 + new Random().nextInt(potionMaxTimeLevel);
+        int powerLevel = 1 + new Random().nextInt(potionMaxPowerLevel);
+        
+        // Get effect type using NamespacedKey (skip for custom fly and fortune potions)
         PotionEffectType effectType = null;
-        if (!effectKey.equals("fly")) {
+        if (!effectKey.equals("fly") && !effectKey.equals("fortune")) {
             effectType = PotionEffectType.getByKey(NamespacedKey.minecraft(effectKey));
             if (effectType == null) {
                 sender.sendMessage(Component.text("Failed to load random potion effect type: " + effectKey, NamedTextColor.RED));
@@ -1939,8 +2362,16 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             }
         }
         
-        // Get duration from config
-        int duration = timeUpgrades.get(timeLevel)[1];
+        // Get duration from this potion's config
+        int duration = potionTimeUpgrades.get(timeLevel)[1];
+        
+        // Calculate max duration for lore
+        int maxDuration = 0;
+        for (int[] timeUpgrade : potionTimeUpgrades.values()) {
+            if (timeUpgrade[1] > maxDuration) {
+                maxDuration = timeUpgrade[1];
+            }
+        }
         
         // Create the master potion
         ItemStack potion = new ItemStack(Material.POTION);
@@ -1959,18 +2390,30 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         // Set the correct color for this effect type
         if (effectKey.equals("fly")) {
             meta.setColor(org.bukkit.Color.ORANGE);
+        } else if (effectKey.equals("fortune")) {
+            meta.setColor(org.bukkit.Color.LIME);
         } else {
             meta.setColor(getPotionColor(effectType));
         }
         
-        // Add custom effect (skip for fly since it has no PotionEffectType)
+        // Add custom effect (handle fortune, skip fly)
         meta.clearCustomEffects();
-        if (!effectKey.equals("fly")) {
+        if (effectKey.equals("fortune")) {
+            PotionEffectType luckEffect = PotionEffectType.LUCK;
+            meta.addCustomEffect(new PotionEffect(luckEffect, duration * 20, powerLevel, false, false, false), true);
+        } else if (!effectKey.equals("fly")) {
             meta.addCustomEffect(new PotionEffect(effectType, duration * 20, powerLevel, false, false, false), true);
         }
         
         // Set display name
-        String effectName = effectKey.equals("fly") ? "Fly" : formatEffectName(effectType);
+        String effectName;
+        if (effectKey.equals("fly")) {
+            effectName = "Fly";
+        } else if (effectKey.equals("fortune")) {
+            effectName = "Fortune";
+        } else {
+            effectName = formatEffectName(effectType);
+        }
         int displayLevel = powerLevel + 1; // Power level 1 = II, 2 = III, etc.
         String romanLevel = toRoman(displayLevel);
         
@@ -1990,10 +2433,134 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             flightSpeed = Math.min(flightSpeed, 1.0f);
             int speedPercent = (int)((flightSpeed / 0.1f) * 100);
             
-            lore.add(Component.text("Flight Speed: " + speedPercent + "%", NamedTextColor.AQUA)
-                .decoration(TextDecoration.ITALIC, false));
-            lore.add(Component.text("Duration: " + formatDuration(duration), NamedTextColor.YELLOW)
-                .decoration(TextDecoration.ITALIC, false));
+            // Check if at max levels
+            boolean atMaxSpeed = powerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = timeLevel >= potionMaxTimeLevel;
+            
+            // Flight speed line
+            if (atMaxSpeed) {
+                lore.add(Component.text("Flight Speed: " + speedPercent + "% (MAX)", NamedTextColor.AQUA)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                // Calculate max speed
+                float maxFlightSpeed = 0.1f * (1.0f + (potionMaxPowerLevel * 0.2f));
+                maxFlightSpeed = Math.min(maxFlightSpeed, 1.0f);
+                int maxSpeedPercent = (int)((maxFlightSpeed / 0.1f) * 100);
+                lore.add(Component.text("Flight Speed: " + speedPercent + "% (Max: " + maxSpeedPercent + "%)", NamedTextColor.AQUA)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Duration line
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Add upgrade cost lines if not at max
+            if (!atMaxSpeed) {
+                int nextPowerLevel = powerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text("Flight Speed Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = timeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+        } else if (effectKey.equals("fortune")) {
+            // Check if at max levels
+            boolean atMaxLuck = powerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = timeLevel >= potionMaxTimeLevel;
+            
+            // Luck line
+            if (atMaxLuck) {
+                lore.add(Component.text("Luck: +" + (powerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Luck: +" + (powerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Duration line
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Add upgrade cost lines if not at max
+            if (!atMaxLuck) {
+                int nextPowerLevel = powerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text("Luck Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = timeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+        } else {
+            // Standard potion lore (for vanilla effects like speed, strength, etc.)
+            boolean atMaxPower = powerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = timeLevel >= potionMaxTimeLevel;
+            
+            // Power line
+            String powerLabel = effectName;
+            if (atMaxPower) {
+                lore.add(Component.text(powerLabel + ": +" + (powerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text(powerLabel + ": +" + (powerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Duration line
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            // Add upgrade cost lines if not at max
+            if (!atMaxPower) {
+                int nextPowerLevel = powerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text(powerLabel + " Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = timeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
         }
         
         meta.lore(lore);

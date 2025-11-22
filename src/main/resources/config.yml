@@ -49,6 +49,15 @@ upgrade-power:
 # Per-potion overrides (optional)
 # Example: Fortune potion with different upgrade path
 fortune:
+  upgrade-time:
+    - "1,1,360"     # Level 1: 1 redstone = 6 minutes
+    - "2,2,720"     # Level 2: 2 redstone = 12 minutes
+    - "3,4,1080"    # Level 3: 4 redstone = 18 minutes
+    - "4,8,1440"    # Level 4: 8 redstone = 24 minutes
+    - "5,16,1800"   # Level 5: 16 redstone = 30 minutes
+    - "6,32,3600"   # Level 6: 32 redstone = 60 minutes
+    - "7,64,7200"   # Level 7: 64 redstone = 120 minutes
+    
   upgrade-power:
     - "1,1"         # Level 1: 1 glowstone = Luck II
     - "2,2"         # Level 2: 2 glowstone = Luck III

@@ -187,9 +187,24 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         }
     }
     
+    /**
+     * PLUGIN LIFECYCLE: Called when the plugin is enabled (server startup or /reload)
+     * 
+     * This method initializes all plugin systems in a specific order:
+     * 1. Display startup messages (branding)
+     * 2. Initialize NBT keys (required before any NBT operations)
+     * 3. Load configuration from config.yml
+     * 4. Register event listeners and command handlers
+     * 5. Start background tasks
+     * 6. Load persistent data for online players
+     * 
+     * The initialization order is critical - changing it may cause errors!
+     */
     @Override
     public void onEnable() {
-        // Display startup messages
+        // ===== STEP 1: Display startup messages =====
+        // These messages appear in the console when the server starts
+        // Green = success message, Purple = attribution
         getServer().getConsoleSender().sendMessage(
             Component.text("[MasterBrewing] MasterBrewing Started!", NamedTextColor.GREEN)
         );
@@ -197,47 +212,82 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             Component.text("[MasterBrewing] By SupaFloof Games, LLC", NamedTextColor.LIGHT_PURPLE)
         );
         
-        // Initialize persistent data keys
+        // ===== STEP 2: Initialize persistent data keys =====
+        // These NamespacedKey objects are used to store custom NBT data on items and blocks
+        // Format: "masterbrewing:key_name" ensures uniqueness across all plugins
+        // Must be initialized before any code tries to read/write NBT data
+        
+        // Master Brewing Stand marker - identifies special brewing stands
         masterBrewingStandKey = new NamespacedKey(this, "master_brewing_stand");
-        potionTimeLevelKey = new NamespacedKey(this, "potion_time_level");
-        potionPowerLevelKey = new NamespacedKey(this, "potion_power_level");
-        potionDurationKey = new NamespacedKey(this, "potion_duration");
-        potionEffectTypeKey = new NamespacedKey(this, "potion_effect_type");
-        masterPotionKey = new NamespacedKey(this, "master_potion");
         
-        // Initialize brewing stand state keys
-        brewingSlot0Key = new NamespacedKey(this, "brewing_slot_0");
-        brewingSlot1Key = new NamespacedKey(this, "brewing_slot_1");
-        brewingSlot2Key = new NamespacedKey(this, "brewing_slot_2");
-        brewingSlot3Key = new NamespacedKey(this, "brewing_slot_3");
-        brewingSlot4Key = new NamespacedKey(this, "brewing_slot_4");
-        brewingFuelLevelKey = new NamespacedKey(this, "brewing_fuel_level");
+        // Master Potion NBT keys - track upgrade levels and effect data
+        potionTimeLevelKey = new NamespacedKey(this, "potion_time_level");      // Duration upgrade level (0-based)
+        potionPowerLevelKey = new NamespacedKey(this, "potion_power_level");    // Amplifier upgrade level (0-based)
+        potionDurationKey = new NamespacedKey(this, "potion_duration");          // Total duration in seconds
+        potionEffectTypeKey = new NamespacedKey(this, "potion_effect_type");    // Effect identifier (e.g., "speed", "fly")
+        masterPotionKey = new NamespacedKey(this, "master_potion");              // Boolean marker for master potions
         
-        // Save default config and load upgrade tiers
+        // Brewing Stand inventory persistence keys - save/restore stand contents when broken/placed
+        // These keys store serialized ItemStacks as Base64 strings
+        brewingSlot0Key = new NamespacedKey(this, "brewing_slot_0");  // Left potion slot
+        brewingSlot1Key = new NamespacedKey(this, "brewing_slot_1");  // Middle potion slot
+        brewingSlot2Key = new NamespacedKey(this, "brewing_slot_2");  // Right potion slot
+        brewingSlot3Key = new NamespacedKey(this, "brewing_slot_3");  // Ingredient slot (top center)
+        brewingSlot4Key = new NamespacedKey(this, "brewing_slot_4");  // Fuel slot (blaze powder)
+        brewingFuelLevelKey = new NamespacedKey(this, "brewing_fuel_level");  // Remaining fuel charges
+        
+        // ===== STEP 3: Load configuration =====
+        // saveDefaultConfig() creates config.yml from the plugin jar if it doesn't exist
+        // This ensures first-time users have a working config without manual setup
         saveDefaultConfig();
+        
+        // loadUpgradeTiers() parses the config.yml and builds the upgrade path maps
+        // This must happen before any brewing events can be processed
         loadUpgradeTiers();
         
-        // Load saved master brewing stand locations
-        
-        // Register events and commands
+        // ===== STEP 4: Register event listeners and commands =====
+        // Event listeners allow us to react to player actions (brewing, clicking, etc.)
         getServer().getPluginManager().registerEvents(this, this);
+        
+        // Command handlers process /masterbrewing commands
+        // Tab completer provides auto-completion suggestions
         getCommand("masterbrewing").setExecutor(this);
         getCommand("masterbrewing").setTabCompleter(this);
         
-        // Start continuous effect refresh task (runs every second)
+        // ===== STEP 5: Start background tasks =====
+        // This task runs continuously to refresh active potion effects on players
+        // Required because our effects bypass vanilla potion duration limits
         startMasterPotionEffectTask();
         
-        // Load effects for any players already online (in case of /reload)
+        // ===== STEP 6: Load persistent data for online players =====
+        // This handles the case where plugin is reloaded while players are online
+        // We need to restore their active effects from disk
         for (Player player : Bukkit.getOnlinePlayers()) {
             loadPlayerEffects(player.getUniqueId());
         }
         
+        // Final success message
         getLogger().info("MasterBrewing plugin enabled!");
     }
     
+    /**
+     * PLUGIN LIFECYCLE: Called when the plugin is disabled (server shutdown or /reload)
+     * 
+     * This method ensures data persistence by saving all active effects to disk.
+     * Critical for preventing data loss when server shuts down unexpectedly.
+     * 
+     * Process:
+     * 1. Iterate through all players with active effects
+     * 2. Save each player's effect data to individual files
+     * 3. Log shutdown message
+     * 
+     * Note: We do NOT clear the activeMasterEffects map here because if this
+     * is a plugin reload (not shutdown), we want to keep effects in memory.
+     */
     @Override
     public void onDisable() {
-        // Save all active player effects
+        // Save all active player effects to disk for persistence
+        // This prevents data loss if the server crashes or is force-killed
         for (UUID uuid : activeMasterEffects.keySet()) {
             List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
             savePlayerEffects(uuid, effects);
@@ -247,9 +297,42 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Loads upgrade tiers from config.yml
+     * CONFIGURATION LOADING: Parses config.yml and builds upgrade tier maps
+     * 
+     * This method handles two types of upgrade configurations:
+     * 
+     * 1. GLOBAL UPGRADES (apply to all potions by default)
+     *    upgrade-time: List of "level,redstone-cost,duration-seconds"
+     *    upgrade-power: List of "level,glowstone-cost"
+     * 
+     * 2. PER-POTION OVERRIDES (specific costs/durations for certain effects)
+     *    <effect-name>:
+     *      upgrade-time: List of "level,cost,duration"
+     *      upgrade-power: List of "level,cost"
+     * 
+     * Example config:
+     *   upgrade-time:
+     *     - "1,4,600"    # Level 1: 4 redstone = 10 minutes
+     *     - "2,8,1200"   # Level 2: 8 redstone = 20 minutes
+     *   
+     *   upgrade-power:
+     *     - "1,4"        # Level 1: 4 glowstone
+     *     - "2,8"        # Level 2: 8 glowstone
+     *   
+     *   speed:           # Speed potions have custom costs
+     *     upgrade-time:
+     *       - "1,2,300"  # Cheaper/shorter than default
+     * 
+     * The method also calculates maxTimeLevel and maxPowerLevel by finding
+     * the highest level across all configurations (global + per-potion).
+     * 
+     * Error Handling:
+     * - Invalid format entries are logged and skipped
+     * - Missing sections result in empty maps (safe defaults)
+     * - Parsing errors don't crash the plugin
      */
     private void loadUpgradeTiers() {
+        // Clear existing configurations to prevent stale data on /reload
         timeUpgrades.clear();
         powerUpgrades.clear();
         maxTimeLevel = 0;
@@ -259,65 +342,87 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         List<String> timeConfigs = config.getStringList("upgrade-time");
         List<String> powerConfigs = config.getStringList("upgrade-power");
         
-        // Load time upgrades
+        // ===== LOAD GLOBAL TIME UPGRADES =====
+        // Format: "level,redstone-cost,duration-seconds"
+        // These upgrades apply to all potions unless overridden
         for (String entry : timeConfigs) {
             try {
+                // Split CSV format: "1,4,600" -> ["1", "4", "600"]
                 String[] parts = entry.split(",");
                 if (parts.length != 3) {
                     getLogger().warning("Invalid upgrade-time entry: " + entry);
                     continue;
                 }
                 
-                int level = Integer.parseInt(parts[0].trim());
-                int redstoneCost = Integer.parseInt(parts[1].trim());
-                int duration = Integer.parseInt(parts[2].trim());
+                // Parse each component
+                int level = Integer.parseInt(parts[0].trim());          // Upgrade level (1, 2, 3...)
+                int redstoneCost = Integer.parseInt(parts[1].trim());   // How many redstone dust needed
+                int duration = Integer.parseInt(parts[2].trim());       // Duration in seconds
                 
+                // Store in map: level -> [cost, duration]
                 timeUpgrades.put(level, new int[]{redstoneCost, duration});
+                
+                // Track maximum level across all upgrades
                 maxTimeLevel = Math.max(maxTimeLevel, level);
             } catch (Exception e) {
+                // Log and skip invalid entries rather than crashing
                 getLogger().warning("Failed to parse upgrade-time entry: " + entry);
             }
         }
         
-        // Load power upgrades
+        // ===== LOAD GLOBAL POWER UPGRADES =====
+        // Format: "level,glowstone-cost"
+        // These upgrades apply to all potions unless overridden
         for (String entry : powerConfigs) {
             try {
+                // Split CSV format: "1,4" -> ["1", "4"]
                 String[] parts = entry.split(",");
                 if (parts.length != 2) {
                     getLogger().warning("Invalid upgrade-power entry: " + entry);
                     continue;
                 }
                 
-                int level = Integer.parseInt(parts[0].trim());
-                int glowstoneCost = Integer.parseInt(parts[1].trim());
+                // Parse each component
+                int level = Integer.parseInt(parts[0].trim());         // Upgrade level (1, 2, 3...)
+                int glowstoneCost = Integer.parseInt(parts[1].trim()); // How many glowstone dust needed
                 
+                // Store in map: level -> cost
+                // Power upgrades don't have a duration component (only affects amplifier)
                 powerUpgrades.put(level, glowstoneCost);
+                
+                // Track maximum level across all upgrades
                 maxPowerLevel = Math.max(maxPowerLevel, level);
             } catch (Exception e) {
+                // Log and skip invalid entries rather than crashing
                 getLogger().warning("Failed to parse upgrade-power entry: " + entry);
             }
         }
         
-        // Load per-potion upgrade overrides
+        // ===== LOAD PER-POTION OVERRIDE CONFIGURATIONS =====
+        // This section allows admins to customize costs for specific potion types
+        // For example: speed potions might be cheaper than strength potions
         potionUpgradePaths.clear();
-        Set<String> configKeys = config.getKeys(false);
+        Set<String> configKeys = config.getKeys(false); // Get top-level keys
         
         for (String key : configKeys) {
-            // Skip the default upgrade sections
+            // Skip the default upgrade sections (already processed above)
             if (key.equals("upgrade-time") || key.equals("upgrade-power")) {
                 continue;
             }
             
-            // Check if this is a valid potion type from our map
+            // Check if this key corresponds to a valid potion effect
+            // POTION_NAME_TO_EFFECT_KEY contains all valid potion names
             if (!POTION_NAME_TO_EFFECT_KEY.containsKey(key)) {
-                continue;
+                continue;  // Not a potion name, skip
             }
             
+            // Get the internal effect key (e.g., "speed" -> "speed", "healing" -> "instant_health")
             String effectKey = POTION_NAME_TO_EFFECT_KEY.get(key);
             
-            // Load this potion's time upgrades (or use defaults)
+            // ===== Load this potion's custom time upgrades =====
             Map<Integer, int[]> potionTimeUpgrades = new TreeMap<>();
             if (config.contains(key + ".upgrade-time")) {
+                // Potion has custom time upgrades defined
                 List<String> potionTimeConfigs = config.getStringList(key + ".upgrade-time");
                 for (String entry : potionTimeConfigs) {
                     try {
@@ -337,13 +442,14 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     }
                 }
             } else {
-                // Use default time upgrades
+                // No custom time upgrades - use global defaults
                 potionTimeUpgrades.putAll(timeUpgrades);
             }
             
-            // Load this potion's power upgrades (or use defaults)
+            // ===== Load this potion's custom power upgrades =====
             Map<Integer, Integer> potionPowerUpgrades = new TreeMap<>();
             if (config.contains(key + ".upgrade-power")) {
+                // Potion has custom power upgrades defined
                 List<String> potionPowerConfigs = config.getStringList(key + ".upgrade-power");
                 for (String entry : potionPowerConfigs) {
                     try {
@@ -362,11 +468,12 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     }
                 }
             } else {
-                // Use default power upgrades
+                // No custom power upgrades - use global defaults
                 potionPowerUpgrades.putAll(powerUpgrades);
             }
             
-            // Create and store the upgrade path for this potion
+            // Create and store the UpgradePath for this potion type
+            // Only store if at least one upgrade type is defined
             if (!potionTimeUpgrades.isEmpty() || !potionPowerUpgrades.isEmpty()) {
                 UpgradePath path = new UpgradePath(potionTimeUpgrades, potionPowerUpgrades);
                 potionUpgradePaths.put(effectKey, path);
@@ -374,229 +481,445 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             }
         }
         
+        // Log summary of loaded configuration
         getLogger().info("Loaded " + timeUpgrades.size() + " time upgrades (max level: " + maxTimeLevel + ")");
         getLogger().info("Loaded " + powerUpgrades.size() + " power upgrades (max level: " + maxPowerLevel + ")");
     }
     
     /**
-     * Gets the time upgrade map for a specific potion type
-     * Returns the potion-specific upgrade path if it exists, otherwise returns the default
+     * UPGRADE PATH RESOLUTION: Gets the time upgrade configuration for a potion
+     * 
+     * This method implements a fallback system:
+     * 1. First checks if the potion has a custom upgrade path defined
+     * 2. If yes: returns the potion-specific configuration
+     * 3. If no: returns the global default configuration
+     * 
+     * This allows admins to customize costs for specific potions while
+     * maintaining reasonable defaults for all others.
+     * 
+     * Example:
+     *   - Speed potions might have custom cheap upgrades
+     *   - Unconfigured potions (like poison) use global defaults
+     *   - Both work seamlessly without special handling
+     * 
+     * @param effectKey The effect identifier (e.g., "speed", "strength", "fly")
+     * @return Map of level -> [redstone cost, duration in seconds]
      */
     private Map<Integer, int[]> getTimeUpgrades(String effectKey) {
+        // Check if this potion type has a custom upgrade path
         if (potionUpgradePaths.containsKey(effectKey)) {
             return potionUpgradePaths.get(effectKey).timeUpgrades;
         }
+        // Fall back to global defaults
         return timeUpgrades;
     }
     
     /**
-     * Gets the power upgrade map for a specific potion type
-     * Returns the potion-specific upgrade path if it exists, otherwise returns the default
+     * UPGRADE PATH RESOLUTION: Gets the power upgrade configuration for a potion
+     * 
+     * Same fallback logic as getTimeUpgrades(), but for power (glowstone) upgrades.
+     * 
+     * Power upgrades increase the amplifier of the potion effect:
+     * - Level 0: Amplifier 1 (e.g., Speed II)
+     * - Level 1: Amplifier 2 (e.g., Speed III)
+     * - Level 2: Amplifier 3 (e.g., Speed IV)
+     * And so on, without vanilla's level limits.
+     * 
+     * @param effectKey The effect identifier (e.g., "speed", "strength", "fly")
+     * @return Map of level -> glowstone cost
      */
     private Map<Integer, Integer> getPowerUpgrades(String effectKey) {
+        // Check if this potion type has a custom upgrade path
         if (potionUpgradePaths.containsKey(effectKey)) {
             return potionUpgradePaths.get(effectKey).powerUpgrades;
         }
+        // Fall back to global defaults
         return powerUpgrades;
     }
     
     /**
-     * Gets the max time level for a specific potion type
+     * UPGRADE PATH RESOLUTION: Gets the maximum time level for a potion
+     * 
+     * Returns the highest achievable time (duration) upgrade level for the
+     * specified potion effect. This respects potion-specific configurations.
+     * 
+     * Used for:
+     * - Validating upgrade attempts (can't upgrade past max)
+     * - Displaying "MAX" indicators in potion lore
+     * - Tab completion suggestions in commands
+     * 
+     * @param effectKey The effect identifier (e.g., "speed", "strength")
+     * @return Maximum time upgrade level for this potion
      */
     private int getMaxTimeLevel(String effectKey) {
+        // Check if potion has custom upgrade path with its own max level
         if (potionUpgradePaths.containsKey(effectKey)) {
             return potionUpgradePaths.get(effectKey).maxTimeLevel;
         }
+        // Fall back to global maximum
         return maxTimeLevel;
     }
     
     /**
-     * Gets the max power level for a specific potion type
+     * UPGRADE PATH RESOLUTION: Gets the maximum power level for a potion
+     * 
+     * Returns the highest achievable power (amplifier) upgrade level for the
+     * specified potion effect. This respects potion-specific configurations.
+     * 
+     * Used for:
+     * - Validating upgrade attempts (can't upgrade past max)
+     * - Displaying "MAX" indicators in potion lore
+     * - Tab completion suggestions in commands
+     * 
+     * @param effectKey The effect identifier (e.g., "speed", "strength")
+     * @return Maximum power upgrade level for this potion
      */
     private int getMaxPowerLevel(String effectKey) {
+        // Check if potion has custom upgrade path with its own max level
         if (potionUpgradePaths.containsKey(effectKey)) {
             return potionUpgradePaths.get(effectKey).maxPowerLevel;
         }
+        // Fall back to global maximum
         return maxPowerLevel;
     }
     
     /**
-     * Starts the unified luck potion brewing timer task
-     * Runs every 5 ticks and decrements all active brewing timers
-     */
-    /**
-     * Starts a repeating task that continuously refreshes master potion effects
-     * OPTIMIZED: Runs every 3 seconds (instead of 1) and only refreshes effects that need it
+     * EFFECT MANAGEMENT: Starts the continuous effect refresh task
+     * 
+     * This is the heart of the master potion system. It maintains active effects
+     * on players by periodically checking and refreshing them.
+     * 
+     * ==============================================================================
+     * WHY IS THIS NEEDED?
+     * ==============================================================================
+     * Minecraft's vanilla potion system has hard limits:
+     * - Maximum duration: 9 minutes 59 seconds (effic ticks: 19999)
+     * - Maximum amplifier: Level 255
+     * - No support for custom effects like flight or fortune
+     * 
+     * Master potions bypass these limits by:
+     * 1. Storing effect data in our own tracking system (activeMasterEffects)
+     * 2. Periodically reapplying effects before they expire
+     * 3. Using custom handlers for non-vanilla effects (fly, fortune)
+     * 
+     * ==============================================================================
+     * HOW IT WORKS
+     * ==============================================================================
+     * Every 3 seconds (60 ticks), this task:
+     * 1. Iterates through all players with active master potion effects
+     * 2. For each effect on each player:
+     *    a. Checks if effect has expired (currentTime >= expiryTime)
+     *    b. If expired: Removes effect and cleans up
+     *    c. If active but close to expiring (<30s): Refreshes the effect
+     *    d. If active with plenty of time: Skips refresh (optimization)
+     * 3. Shows expiration warnings at 30s and 10s remaining
+     * 4. Removes players from tracking map when all effects expire
+     * 
+     * ==============================================================================
+     * OPTIMIZATIONS
+     * ==============================================================================
+     * - Runs every 3 seconds instead of every tick (reduces CPU by 60x)
+     * - Only checks players in activeMasterEffects map (not all online players)
+     * - Only refreshes effects within 30 seconds of expiring
+     * - Uses cached Player lookups (Bukkit.getPlayer is relatively expensive)
+     * - Skips offline players without repeatedly checking PlayerData
+     * - Flight speed only updated when it differs from desired value
+     * 
+     * ==============================================================================
+     * SPECIAL EFFECT HANDLING
+     * ==============================================================================
+     * 
+     * FLY EFFECT:
+     * - Managed via setAllowFlight() / setFlying() API calls
+     * - Not a vanilla potion effect
+     * - Speed scales with amplifier: base * (1.0 + amplifier * 0.2)
+     * - Only affects survival/adventure mode (creative already has flight)
+     * - Shows action bar with remaining time
+     * - On expiry: Disables flight and resets speed to default
+     * 
+     * FORTUNE EFFECT:
+     * - Implemented as vanilla LUCK potion effect
+     * - Luck affects loot table drops (better loot from mobs/chests)
+     * - Applied with our custom amplifier (beyond vanilla limits)
+     * 
+     * VANILLA EFFECTS:
+     * - Applied with remaining duration (not full duration)
+     * - Only reapplied if completely missing (avoids conflicts)
+     * - Doesn't fight with other plugins' effect applications
+     * 
+     * ==============================================================================
+     * THREADING
+     * ==============================================================================
+     * This task runs on the main Bukkit thread (runTaskTimer, not async).
+     * Why? All Bukkit API calls (player.addPotionEffect, player.setAllowFlight)
+     * must be on the main thread or they'll throw IllegalStateException.
+     * 
+     * Performance impact is minimal because:
+     * - Only checks players with active effects (usually < 10 players)
+     * - Only runs every 3 seconds
+     * - Most operations are O(1) map lookups
+     * 
+     * ==============================================================================
      */
     private void startMasterPotionEffectTask() {
+        // Schedule repeating task: delay 60 ticks (3s), period 60 ticks (3s)
         Bukkit.getScheduler().runTaskTimer(this, () -> {
+            // Get current time for expiry calculations
+            // Uses System.currentTimeMillis() for precision (not affected by lag)
             long currentTime = System.currentTimeMillis();
             
-            // OPTIMIZATION: Only check players who have active effects
+            // OPTIMIZATION: Create snapshot of players to check
+            // This prevents ConcurrentModificationException if map changes during iteration
             Set<UUID> playersToCheck = new HashSet<>(activeMasterEffects.keySet());
             
+            // Process each player with active effects
             for (UUID uuid : playersToCheck) {
-                // OPTIMIZATION: Skip offline players without looking them up repeatedly
+                // OPTIMIZATION: Get player once and reuse
+                // Bukkit.getPlayer() lookups are relatively expensive
                 Player player = Bukkit.getPlayer(uuid);
+                
+                // OPTIMIZATION: Skip offline players immediately
+                // No point processing effects for players who aren't online
                 if (player == null || !player.isOnline()) {
-                    continue;
+                    continue;  // Keep effects in map for when player returns
                 }
                 
+                // Get this player's active effects list
                 List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
                 if (effects == null || effects.isEmpty()) {
-                    continue;
+                    continue;  // Shouldn't happen, but safety check
                 }
                 
-                // Track if player has active fly effect for action bar (use arrays for lambda capture)
+                // Track fly status for action bar display
+                // Using arrays for lambda capture (final variables)
                 final boolean[] hasActiveFly = {false};
                 final String[] flyActionBar = {null};
                 
-                // Clean up expired effects and restore missing ones
+                // Process all effects for this player
+                // removeIf() iterates and removes expired effects in one pass
                 effects.removeIf(effect -> {
-                    // Calculate remaining time
+                    // Calculate remaining time for this effect
                     long remainingMillis = effect.expiryTime - currentTime;
                     int remainingSeconds = (int) (remainingMillis / 1000);
                     
-                    // If effect has expired, remove it from tracking
+                    // ===== CHECK FOR EXPIRATION =====
                     if (currentTime >= effect.expiryTime) {
-                        // Handle fly expiration
+                        // Effect has expired - clean up and remove
+                        
                         if (effect.effectTypeKey.equals("fly")) {
-                            // Only disable flight if player is in survival/adventure
+                            // Revoke flight permission
+                            // Only affect survival/adventure mode (creative keeps flight)
                             if (player.getGameMode() == org.bukkit.GameMode.SURVIVAL || 
                                 player.getGameMode() == org.bukkit.GameMode.ADVENTURE) {
-                                player.setAllowFlight(false);
-                                player.setFlying(false);
-                                player.setFlySpeed(0.1f); // Reset to default
+                                player.setAllowFlight(false);  // Disable flight ability
+                                player.setFlying(false);       // Stop flying immediately
+                                player.setFlySpeed(0.1f);      // Reset to vanilla default
                             }
+                            // Notify player that flight ended
                             player.sendMessage(Component.text("Flight ended!", NamedTextColor.RED));
                         }
-                        return true; // Remove from list
+                        
+                        return true; // Remove this effect from the list
                     }
                     
-                    // Show expiration warnings
+                    // ===== EXPIRATION WARNINGS =====
+                    // Show warnings at 30 seconds and 10 seconds remaining
                     if (remainingSeconds == 30 || remainingSeconds == 10) {
+                        // Format effect name for display
                         String effectName;
                         if (effect.effectTypeKey.equals("fly")) {
                             effectName = "Flight";
                         } else if (effect.effectTypeKey.equals("fortune")) {
                             effectName = "Fortune";
                         } else {
+                            // Get vanilla effect display name
                             effectName = formatEffectName(PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effect.effectTypeKey)));
                         }
+                        
+                        // Send warning message
                         player.sendMessage(Component.text(effectName + " ending in " + remainingSeconds + " seconds!", 
                             NamedTextColor.YELLOW));
                     }
                     
-                    // Handle fly effect specially
+                    // ===== HANDLE FLY EFFECT =====
                     if (effect.effectTypeKey.equals("fly")) {
-                        hasActiveFly[0] = true;
+                        hasActiveFly[0] = true;  // Mark that player has active flight
                         
-                        // Maintain flight state only if needed
+                        // Maintain flight state (only if not creative/spectator)
                         if (player.getGameMode() == org.bukkit.GameMode.SURVIVAL || 
                             player.getGameMode() == org.bukkit.GameMode.ADVENTURE) {
+                            
+                            // Ensure flight permission is enabled
                             if (!player.getAllowFlight()) {
                                 player.setAllowFlight(true);
                             }
                             
-                            // OPTIMIZATION: Only set flight speed if it's different from what we want
+                            // OPTIMIZATION: Only update flight speed if it changed
+                            // Calculate desired speed based on amplifier
+                            // Formula: base (0.1) * (1.0 + amplifier * 0.2)
+                            // Example: Amplifier 5 = 0.1 * (1.0 + 5 * 0.2) = 0.1 * 2.0 = 0.2 (2x speed)
                             float desiredSpeed = 0.1f * (1.0f + (effect.amplifier * 0.2f));
-                            desiredSpeed = Math.min(desiredSpeed, 1.0f);
+                            desiredSpeed = Math.min(desiredSpeed, 1.0f);  // Cap at 1.0 (max flight speed)
                             float currentSpeed = player.getFlySpeed();
                             
-                            // Only update if speed differs by more than 0.001 to avoid floating point issues
+                            // Only update if speed differs significantly (avoid floating point issues)
                             if (Math.abs(currentSpeed - desiredSpeed) > 0.001f) {
                                 player.setFlySpeed(desiredSpeed);
                             }
                         }
                         
-                        // Prepare action bar message
-                        int displayLevel = effect.amplifier + 1;
-                        String romanLevel = toRoman(displayLevel);
-                        String durationStr = formatDuration(remainingSeconds);
+                        // Prepare action bar message showing flight level and remaining time
+                        int displayLevel = effect.amplifier + 1;  // Convert 0-based to 1-based
+                        String romanLevel = toRoman(displayLevel);  // Convert to Roman numerals (I, II, III...)
+                        String durationStr = formatDuration(remainingSeconds);  // Format as "5m 30s"
                         flyActionBar[0] = "✈ Flight " + romanLevel + " • " + durationStr + " remaining";
                         
-                        return false; // Keep in list
+                        return false; // Keep effect in list
                     }
                     
-                    // OPTIMIZATION: Only refresh effects that are close to expiring (< 30 seconds)
-                    // This prevents constant fighting with SpecialBooks armor effects
+                    // ===== OPTIMIZATION: Only refresh effects close to expiring =====
+                    // If effect has > 30 seconds remaining, don't refresh yet
+                    // This prevents constant reapplication and conflicts with other plugins
                     if (remainingSeconds > 30) {
                         return false; // Don't refresh yet, keep in list
                     }
                     
-                    // Handle normal potion effects (including fortune -> luck)
+                    // ===== HANDLE VANILLA POTION EFFECTS =====
+                    // Map internal effect keys to Minecraft's effect keys
                     String mappedEffectKey = effect.effectTypeKey;
                     if (effect.effectTypeKey.equals("fortune")) {
-                        mappedEffectKey = "luck"; // Fortune uses LUCK potion effect
+                        mappedEffectKey = "luck"; // Fortune uses LUCK potion effect internally
                     }
                     
+                    // Get the PotionEffectType for this effect
                     PotionEffectType effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(mappedEffectKey));
                     if (effectType == null) {
-                        return true; // Remove invalid effect
+                        // Invalid effect type - remove it
+                        getLogger().warning("Invalid effect type: " + mappedEffectKey);
+                        return true; // Remove from list
                     }
                     
-                    // Effect should still be active - check if player has it
+                    // Check if player currently has this effect
                     PotionEffect currentEffect = player.getPotionEffect(effectType);
                     
                     // OPTIMIZATION: Only restore if effect is completely missing
-                    // Don't fight with other plugins that may have applied effects with different durations
+                    // Don't fight with other plugins that may apply the same effect
+                    // with different durations or amplifiers
                     if (currentEffect == null) {
-                        int durationTicks = remainingSeconds * 20;
-                        // Reapply the effect with remaining duration
-                        player.addPotionEffect(new PotionEffect(effectType, durationTicks, effect.amplifier, false, true, true), true);
+                        // Effect is missing - reapply it with remaining duration
+                        int durationTicks = remainingSeconds * 20;  // Convert seconds to ticks (20 ticks/second)
+                        
+                        // Create and apply potion effect
+                        // Parameters: type, duration, amplifier, ambient, particles, icon
+                        player.addPotionEffect(
+                            new PotionEffect(
+                                effectType,       // Effect type (SPEED, STRENGTH, etc.)
+                                durationTicks,    // Duration in ticks
+                                effect.amplifier, // Amplifier (0 = level I, 1 = level II, etc.)
+                                false,            // Ambient (false = not from beacon)
+                                true,             // Particles (true = show swirl particles)
+                                true              // Icon (true = show in inventory)
+                            ),
+                            true // true = overwrite existing effect
+                        );
                     }
-                    // Don't check amplifier or adjust duration - let other plugins manage their own effects
+                    // If effect exists with different parameters, let the other plugin manage it
+                    // We only care that SOME version of the effect is active
                     
-                    return false; // Keep in list
+                    return false; // Keep effect in list
                 });
                 
-                // Show fly action bar if active
+                // ===== DISPLAY FLY ACTION BAR =====
+                // Show flight status on action bar (text above hotbar)
                 if (hasActiveFly[0] && flyActionBar[0] != null) {
                     player.sendActionBar(Component.text(flyActionBar[0], NamedTextColor.GOLD));
                 }
                 
-                // Remove player from map if no effects left
+                // ===== CLEANUP: Remove player if no effects remain =====
                 if (effects.isEmpty()) {
                     activeMasterEffects.remove(uuid);
+                    // This frees memory and prevents unnecessary iterations in future cycles
                 }
             }
-        }, 60L, 60L); // OPTIMIZATION: Run every 3 seconds (60 ticks) instead of every 1 second
+        }, 60L, 60L); // Run every 3 seconds (60 ticks)
     }
     
     /**
-     * Creates a Master Brewing Stand item with NBT tag
+     * ITEM CREATION: Creates a Master Brewing Stand item
+     * 
+     * This method generates a brewing stand ItemStack with special properties:
+     * 1. Custom display name (gold + bold)
+     * 2. Informative lore describing functionality
+     * 3. NBT marker identifying it as a master brewing stand
+     * 
+     * The NBT marker (masterBrewingStandKey) is critical - it's how we identify
+     * master brewing stands throughout the plugin:
+     * - onBlockPlace checks for it to mark placed blocks
+     * - onBrewEvent checks brewing stands for this marker
+     * - Commands use this to give special stands to players
+     * 
+     * Display:
+     * - Name: "Master Brewing Stand" (gold, bold, no italic)
+     * - Lore: Explains unlimited upgrades and usage
+     * 
+     * @return ItemStack of a master brewing stand ready to give to players
      */
     private ItemStack createMasterBrewingStand() {
+        // Create base brewing stand item
         ItemStack brewingStand = new ItemStack(Material.BREWING_STAND);
         ItemMeta meta = brewingStand.getItemMeta();
         
+        // Set custom display name
+        // Gold color + Bold styling, italic explicitly disabled (Minecraft adds italic by default)
         meta.displayName(Component.text("Master Brewing Stand", NamedTextColor.GOLD, TextDecoration.BOLD)
             .decoration(TextDecoration.ITALIC, false));
         
+        // Create informative lore
         List<Component> lore = new ArrayList<>();
         lore.add(Component.text("A special brewing stand that allows", NamedTextColor.GRAY)
             .decoration(TextDecoration.ITALIC, false));
         lore.add(Component.text("unlimited potion upgrades.", NamedTextColor.GRAY)
             .decoration(TextDecoration.ITALIC, false));
-        lore.add(Component.text("", NamedTextColor.GRAY));
+        lore.add(Component.text("", NamedTextColor.GRAY));  // Blank line for spacing
         lore.add(Component.text("Use redstone to increase duration", NamedTextColor.YELLOW)
             .decoration(TextDecoration.ITALIC, false));
         lore.add(Component.text("Use glowstone to increase power", NamedTextColor.YELLOW)
             .decoration(TextDecoration.ITALIC, false));
         
         meta.lore(lore);
+        
+        // CRITICAL: Mark item as a master brewing stand
+        // This NBT tag is how we identify master stands throughout the plugin
+        // Using BYTE type with value 1 (true)
         meta.getPersistentDataContainer().set(masterBrewingStandKey, PersistentDataType.BYTE, (byte) 1);
         
+        // Apply metadata to item
         brewingStand.setItemMeta(meta);
         return brewingStand;
     }
     
     /**
-     * Checks if an item is a Master Brewing Stand
+     * UTILITY: Checks if an ItemStack is a Master Brewing Stand
+     * 
+     * This method performs a series of validation checks to determine if
+     * a given item is a master brewing stand:
+     * 1. Null check (item exists)
+     * 2. Type check (is a BREWING_STAND material)
+     * 3. Metadata check (has item metadata)
+     * 4. NBT check (has our master brewing stand marker)
+     * 
+     * Used by:
+     * - Event handlers to identify master stands
+     * - Commands to validate items
+     * - Any code that needs to distinguish master stands from normal stands
+     * 
+     * @param item The ItemStack to check
+     * @return true if item is a master brewing stand, false otherwise
      */
     private boolean isMasterBrewingStand(ItemStack item) {
+        // Null safety check
         if (item == null || item.getType() != Material.BREWING_STAND) {
-            return false;
+            return false;  // Not a brewing stand at all
         }
         
         ItemMeta meta = item.getItemMeta();

@@ -1,0 +1,365 @@
+=====================================
+MASTER BREWING GUIDE
+=====================================
+A player's guide to Master Potions
+By SupaFloof Games
+=====================================
+PAGE 1
+=====================================
+WELCOME TO MASTER BREWING!
+
+This guide will teach you how to create incredibly powerful potions using Master Brewing Stands.
+
+With Master Brewing, you can upgrade potions far beyond vanilla Minecraft limits!
+=====================================
+PAGE 2
+=====================================
+WHAT YOU CAN DO:
+
+- Upgrade potion duration with REDSTONE
+- Upgrade potion power with GLOWSTONE
+- Create Flight potions
+- Create Fortune potions
+- Reach extreme power levels
+- Make potions last for hours!
+=====================================
+PAGE 3
+=====================================
+GETTING STARTED:
+
+First, obtain a Master Brewing Stand from a server admin.
+
+Place it like a normal brewing stand.
+
+Add blaze powder as fuel.
+
+The stand works just like vanilla brewing, but better!
+=====================================
+PAGE 4
+=====================================
+BREWING YOUR FIRST POTION:
+
+1. Brew a normal vanilla potion (like Speed using sugar)
+
+2. This creates a potion ready to upgrade
+
+3. The Master Brewing Stand preserves potions when broken
+=====================================
+PAGE 5
+=====================================
+UPGRADING DURATION:
+
+Use REDSTONE DUST to make potions last longer.
+
+1. Place your potion in the stand
+2. Add redstone to ingredient slot
+3. Wait for brewing
+4. Your potion now lasts longer!
+
+Check the potion lore to see upgrade costs.
+=====================================
+PAGE 6
+=====================================
+UPGRADING POWER:
+
+Use GLOWSTONE DUST to make potions stronger.
+
+1. Place your potion in the stand
+2. Add glowstone to ingredient slot
+3. Wait for brewing
+4. Your potion is now more powerful!
+
+Each level requires more materials.
+=====================================
+PAGE 7
+=====================================
+UPGRADE COSTS:
+
+Level 1: Usually 1 material
+Level 2: Usually 4 materials
+Level 3: Usually 16 materials
+Level 4: Usually 32 materials
+Level 5: Usually 64 materials
+
+Different potions may have different costs!
+=====================================
+PAGE 8
+=====================================
+UNDERSTANDING LEVELS:
+
+TIME LEVEL:
+- How long effect lasts
+- Shown in yellow text
+- Higher = longer duration
+
+POWER LEVEL:
+- How strong effect is
+- Shown in green text
+- Higher = stronger effect
+=====================================
+PAGE 9
+=====================================
+READING POTION LORE:
+
+Speed V
+Master Potion
+Speed: +5 (Max: +7)
+Duration: 12m (Max: 30m)
+Speed Upgrade: 16 glowstone
+Duration Upgrade: 16 redstone
+
+This shows current stats and upgrade costs!
+=====================================
+PAGE 10
+=====================================
+USING MASTER POTIONS:
+
+Master Potions work differently than vanilla:
+
+- RIGHT-CLICK to use
+- Effect activates INSTANTLY
+- No drinking animation
+- Empty bottle returned
+=====================================
+PAGE 11
+=====================================
+EFFECT DURATION:
+
+Master Potion effects persist even if you:
+- Log out and back in
+- Server restarts
+- Other things happen
+
+Warnings appear at:
+- 30 seconds remaining
+- 10 seconds remaining
+=====================================
+PAGE 12
+=====================================
+MULTIPLE EFFECTS:
+
+You CAN have multiple different potion effects active!
+
+Each effect has its own timer.
+
+Drinking the same type again refreshes that effect.
+=====================================
+PAGE 13
+=====================================
+FLIGHT POTIONS:
+
+Flight potions grant creative-style flight in survival!
+
+- Double-tap space to fly
+- Space to go up
+- Shift to go down
+- Higher levels = faster flight
+
+WARNING: Land before it expires!
+=====================================
+PAGE 14
+=====================================
+FLIGHT SPEED:
+
+Power Level I: 100% speed (normal creative)
+Power Level II: 120% speed
+Power Level III: 140% speed
+Power Level IV: 160% speed
+Power Level V: 180% speed
+
+Even higher levels possible!
+=====================================
+PAGE 15
+=====================================
+FORTUNE POTIONS:
+
+Fortune potions grant the Luck effect for better loot!
+
+Effects:
+- Better fishing catches
+- Better mob drops
+- Better chest loot
+- Better enchantments
+
+Can reach extreme luck values!
+=====================================
+PAGE 16
+=====================================
+EFFICIENT UPGRADING:
+
+TIP: Upgrade multiple potions at once!
+
+Put 3 potions in the brewing stand.
+
+All potions upgrade together using the SAME cost.
+
+This saves materials!
+=====================================
+PAGE 17
+=====================================
+STRATEGIC UPGRADES:
+
+Balance duration and power:
+
+- Long duration + low power = cheap but effective
+- Short duration + high power = expensive but powerful
+- Max both = ultimate power!
+=====================================
+PAGE 18
+=====================================
+POTION MANAGEMENT:
+
+- Always check lore before upgrading
+- Plan ahead for materials
+- Store master potions carefully
+- Use at the right time
+- Don't waste expensive potions!
+=====================================
+PAGE 19
+=====================================
+BREAKING BREWING STANDS:
+
+When you break a Master Brewing Stand:
+
+- All contents are saved
+- All fuel is saved
+- Break with any tool
+- Place elsewhere safely
+=====================================
+PAGE 20
+=====================================
+TYPICAL PROGRESSION:
+
+Time Level 1: 6 minutes
+Time Level 2: 12 minutes
+Time Level 3: 18 minutes
+Time Level 4: 24 minutes
+Time Level 5: 30 minutes
+
+Power levels increase similarly!
+=====================================
+PAGE 21
+=====================================
+EXAMPLE: SPEED POTION
+
+Start: Speed I, 3 minutes
+
+Upgrade power to V:
+- Costs 1+4+16+32 = 53 glowstone
+- Now: Speed V, 3 minutes
+
+Upgrade time to level 5:
+- Costs 1+4+16+32+64 = 117 redstone
+- Final: Speed V, 30 minutes
+=====================================
+PAGE 22
+=====================================
+EXAMPLE: FLIGHT POTION
+
+Start: Flight I, 3 minutes
+
+Upgrade to Flight V:
+- Costs 53 glowstone
+- 180% flight speed
+
+Upgrade duration:
+- Costs 117 redstone
+- 30 minute flight time
+=====================================
+PAGE 23
+=====================================
+COMMON QUESTIONS:
+
+Q: Can I upgrade splash potions?
+A: Yes! All potion types work.
+
+Q: What if I don't have enough materials?
+A: Nothing happens - no upgrade occurs.
+
+Q: Can I downgrade?
+A: No, upgrades are permanent.
+=====================================
+PAGE 24
+=====================================
+Q: Do effects stack?
+A: No - same effect refreshes the timer.
+
+Q: Can I use on modded potions?
+A: Only vanilla potions work.
+
+Q: What if flight ends mid-air?
+A: You'll fall! Have a backup ready!
+=====================================
+PAGE 25
+=====================================
+TIPS FOR SUCCESS:
+
+1. Start with cheap upgrades to test
+2. Gather materials in bulk
+3. Upgrade in batches of 3
+4. Balance time and power
+5. Save expensive potions for important tasks
+=====================================
+PAGE 26
+=====================================
+BEST USES:
+
+Speed: Building, traveling, farming
+Strength: Combat, mining
+Regeneration: Exploring, fighting
+Fortune: Fishing, looting, mining
+Flight: Building, exploring
+Night Vision: Caving, ocean exploring
+=====================================
+PAGE 27
+=====================================
+ENDGAME GOALS:
+
+- Max level Speed for ultra-fast travel
+- Max level Strength for powerful combat
+- Max level Fortune for incredible loot
+- Max level Flight for ultimate building
+- Max level Regeneration for survivability
+=====================================
+PAGE 28
+=====================================
+REMEMBER:
+
+Master Brewing Stands are powerful tools.
+
+Use them wisely.
+
+Balance your upgrades.
+
+Plan your material gathering.
+
+Most importantly: Have fun with your new powers!
+=====================================
+PAGE 29
+=====================================
+UPGRADE STRATEGY:
+
+Early Game:
+- Focus on level 1-2 upgrades
+- Cheap and effective
+
+Mid Game:
+- Push to level 3-4
+- Noticeable improvements
+
+Late Game:
+- Max out important potions
+- Ultimate power achieved!
+=====================================
+PAGE 30
+=====================================
+FINAL TIPS:
+
+- Master Potions are valuable - don't waste them
+- Store in secure chests
+- Use for important activities
+- Experiment with different effects
+- Share knowledge with friends!
+
+Happy Brewing!
+✨🧪

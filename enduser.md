@@ -15,16 +15,16 @@ Welcome to MasterBrewing! This guide will teach you everything you need to know 
 
 MasterBrewing allows you to upgrade potions far beyond vanilla Minecraft's limitations! With Master Brewing Stands, you can:
 
-- **Increase potion duration** by brewing with redstone (up to hours!)
-- **Increase potion power** by brewing with glowstone (up to 64+ levels!)
-- **Use special potions** like Flight and Fortune
-- **Instant activation** - no drinking animation!
+- **Increase potion duration** by brewing with redstone (up to 30 minutes or more)
+- **Increase potion power** by brewing with glowstone (up to 6 levels or more)
+- **Use special potions** like Fly and Fortune
+- **Instant activation** - no waiting for drinking animation!
 
 ## Getting Started
 
 ### Obtaining a Master Brewing Stand
 
-Master Brewing Stands are special items that must be given by server administrators. Once you have one:
+Master Brewing Stands are purchased using in-game currency via the /shop command. Once you have one:
 
 1. **Place it** like a normal brewing stand
 2. **Add fuel** (blaze powder) just like vanilla brewing
@@ -66,7 +66,7 @@ The amount of materials needed increases with each level:
 - **Level 1**: Usually 1 redstone/glowstone
 - **Level 2**: Usually 4 redstone/glowstone  
 - **Level 3**: Usually 16 redstone/glowstone
-- **Higher levels**: Can require up to 64 materials per upgrade
+- **Higher levels**: Can require up to 64 glowstone/redstone for the upgrade
 
 *Note: Different potion types may have different upgrade costs. Always check the potion's lore!*
 
@@ -134,9 +134,19 @@ You can have multiple different Master Potion effects active at once!
 
 ## Special Potion Types
 
-### Flight Potion
+### Fly Potion
 
-Flight potions grant **creative-style flight** in survival mode!
+Fly potions grant **creative-style flight** in survival mode! 
+
+## How to obtain a Fly Potion
+
+Fly potions can be obtained in several ways:
+
+1. **Chests** - opening a chest can sometimes drop special loot including a Fly potion.  the higher your luck, the more likely it is and the more you get.
+2. **Fishing** - fishing can give you special loot including a Fly potion.  the higher your luck and Luck of the Sea, the more you likely it is and the more you get
+3. **Redeeming Keys** - Rewards keys are aquired via placing in a jobs event, monster combat, and your harvest hoe.  
+
+> **Note:** You cannot craft this potion. 
 
 **How it works:**
 - Enables flight like creative mode
@@ -154,6 +164,16 @@ Flight potions grant **creative-style flight** in survival mode!
 ### Fortune Potion
 
 Fortune potions grant the **Luck effect** for better loot!
+
+## How to obtain a Fortune Potion
+
+Fortune potions can be obtained in several ways:
+
+1. **Chests** - opening a chest can sometimes drop special loot including a Fortune potion.  the higher your luck, the more likely it is and the more you get.
+2. **Fishing** - fishing can give you special loot including a Fortune potion.  the higher your luck and Luck of the Sea, the more likely it is and the more you get
+3. **Redeeming Keys** - Rewards keys are aquired via placing in a jobs event, monster combat, and your harvest hoe.  
+
+> **Note:** You cannot craft this potion. 
 
 **How it works:**
 - Increases luck stat for better drops
@@ -197,21 +217,21 @@ Fortune potions grant the **Luck effect** for better loot!
 
 ### Cost Comparison
 
-| Time Level | Redstone Cost | Duration |
-|------------|---------------|----------|
-| 1 | 1 | 6 minutes |
-| 2 | 4 | 12 minutes |
-| 3 | 16 | 18 minutes |
-| 4 | 32 | 24 minutes |
-| 5 | 64 | 30 minutes |
+| Time Level | Redstone Cost | Duration   |
+|------------|---------------|------------|
+| 1          | 1             | 6 minutes  |
+| 2          | 4             | 12 minutes |
+| 3          | 16            | 18 minutes |
+| 4          | 32            | 24 minutes |
+| 5          | 64            | 30 minutes |
 
 | Power Level | Glowstone Cost | Display |
 |-------------|----------------|---------|
-| 1 | 1 | II |
-| 2 | 4 | III |
-| 3 | 16 | IV |
-| 4 | 32 | V |
-| 5 | 64 | VI |
+| 1           | 1              | II      |
+| 2           | 4              | III     |
+| 3           | 16             | IV      |
+| 4           | 32             | V       |
+| 5           | 64             | VI      |
 
 *Note: Fortune and Flight potions may have different costs. Always check your server's configuration!*
 
@@ -233,7 +253,7 @@ A: No - drinking the same effect again refreshes the timer at the new level.
 A: Only vanilla Minecraft potions are supported.
 
 **Q: What happens if my flight ends mid-air?**
-A: You'll start falling! Always land before it expires or have a backup (water bucket, slow falling, etc.)
+A: You'll start falling! Always land before it expires or have a backup (feather falling, slow falling, etc.)
 
 ## Enjoy Your Master Potions!
 
@@ -244,3 +264,7 @@ Now you're ready to create incredibly powerful potions! Remember:
 - Have fun with your new powers!
 
 Happy Brewing! ✨🧪
+
+---
+
+**Made with ❤️ by SupaFloof Games, LLC**

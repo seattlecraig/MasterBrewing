@@ -110,6 +110,32 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     // OPTIMIZATION #3: Static maps for O(1) potion name lookup instead of O(n) switch
     private static final Map<String, String> POTION_NAME_TO_EFFECT_KEY = createPotionNameMap();
     
+    // Instant effects that have no duration (cannot be upgraded with redstone)
+    private static final Set<String> INSTANT_EFFECTS = createInstantEffectsSet();
+    
+    /**
+     * Creates the set of instant effect keys (effects with no duration)
+     * These effects cannot be upgraded with redstone (time upgrades)
+     */
+    private static Set<String> createInstantEffectsSet() {
+        Set<String> set = new HashSet<>();
+        set.add("instant_health");
+        set.add("instant_damage");
+        set.add("saturation");
+        return Collections.unmodifiableSet(set);
+    }
+    
+    /**
+     * Checks if an effect type is an instant effect (no duration)
+     * Instant effects cannot be upgraded with redstone for longer duration
+     * 
+     * @param effectKey The effect identifier (e.g., "instant_health", "speed")
+     * @return true if the effect is instant and has no duration
+     */
+    private static boolean isInstantEffect(String effectKey) {
+        return effectKey != null && INSTANT_EFFECTS.contains(effectKey);
+    }
+    
     /**
      * Creates the potion name to effect key mapping
      */
@@ -1268,6 +1294,10 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             boolean canUpgrade = false;
             
             if (isRedstone) {
+                // Instant effects cannot be upgraded with redstone (no duration)
+                if (isInstantEffect(effectTypeKey)) {
+                    continue; // Skip this potion - cannot upgrade time on instant effects
+                }
                 int nextLevel = currentTimeLevel + 1;
                 int potionMaxTimeLevel = getMaxTimeLevel(effectTypeKey);
                 if (nextLevel <= potionMaxTimeLevel) {
@@ -1550,6 +1580,7 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             // Standard potion lore (for vanilla effects like speed, strength, etc.)
             boolean atMaxPower = newPowerLevel >= potionMaxPowerLevel;
             boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
+            boolean isInstant = isInstantEffect(effectTypeKey);
             
             // Power line
             String powerLabel = effectName;
@@ -1561,12 +1592,18 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     .decoration(TextDecoration.ITALIC, false));
             }
             
-            // Duration line
-            if (atMaxDuration) {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
-                    .decoration(TextDecoration.ITALIC, false));
+            // Duration line (skip for instant effects)
+            if (!isInstant) {
+                if (atMaxDuration) {
+                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                } else {
+                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
             } else {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                // Show "Instant" label for instant effects
+                lore.add(Component.text("Duration: Instant", NamedTextColor.YELLOW)
                     .decoration(TextDecoration.ITALIC, false));
             }
             
@@ -1580,7 +1617,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 }
             }
             
-            if (!atMaxDuration) {
+            // Duration upgrade line (skip for instant effects - they can't be upgraded with redstone)
+            if (!isInstant && !atMaxDuration) {
                 int nextTimeLevel = newTimeLevel + 1;
                 int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
                 if (timeUpgrade != null) {
@@ -2592,6 +2630,7 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             // Standard potion lore (for vanilla effects like speed, strength, etc.)
             boolean atMaxPower = powerLevel >= potionMaxPowerLevel;
             boolean atMaxDuration = timeLevel >= potionMaxTimeLevel;
+            boolean isInstant = isInstantEffect(effectKey);
             
             // Power line
             String powerLabel = effectName;
@@ -2603,12 +2642,18 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     .decoration(TextDecoration.ITALIC, false));
             }
             
-            // Duration line
-            if (atMaxDuration) {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
-                    .decoration(TextDecoration.ITALIC, false));
+            // Duration line (skip for instant effects)
+            if (!isInstant) {
+                if (atMaxDuration) {
+                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                } else {
+                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
             } else {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                // Show "Instant" label for instant effects
+                lore.add(Component.text("Duration: Instant", NamedTextColor.YELLOW)
                     .decoration(TextDecoration.ITALIC, false));
             }
             
@@ -2622,7 +2667,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 }
             }
             
-            if (!atMaxDuration) {
+            // Duration upgrade line (skip for instant effects - they can't be upgraded with redstone)
+            if (!isInstant && !atMaxDuration) {
                 int nextTimeLevel = timeLevel + 1;
                 int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
                 if (timeUpgrade != null) {
@@ -2846,6 +2892,7 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             // Standard potion lore (for vanilla effects like speed, strength, etc.)
             boolean atMaxPower = powerLevel >= potionMaxPowerLevel;
             boolean atMaxDuration = timeLevel >= potionMaxTimeLevel;
+            boolean isInstant = isInstantEffect(effectKey);
             
             // Power line
             String powerLabel = effectName;
@@ -2857,12 +2904,18 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                     .decoration(TextDecoration.ITALIC, false));
             }
             
-            // Duration line
-            if (atMaxDuration) {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
-                    .decoration(TextDecoration.ITALIC, false));
+            // Duration line (skip for instant effects)
+            if (!isInstant) {
+                if (atMaxDuration) {
+                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                } else {
+                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
             } else {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                // Show "Instant" label for instant effects
+                lore.add(Component.text("Duration: Instant", NamedTextColor.YELLOW)
                     .decoration(TextDecoration.ITALIC, false));
             }
             
@@ -2876,7 +2929,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
                 }
             }
             
-            if (!atMaxDuration) {
+            // Duration upgrade line (skip for instant effects - they can't be upgraded with redstone)
+            if (!isInstant && !atMaxDuration) {
                 int nextTimeLevel = timeLevel + 1;
                 int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
                 if (timeUpgrade != null) {

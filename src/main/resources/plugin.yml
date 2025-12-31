@@ -12,6 +12,9 @@ commands:
     aliases: [mb, mbrew]
 
 permissions:
+  masterbrewing.use:
+    description: Allows using the /masterbrewing command to open a virtual brewing stand
+    default: false
   masterbrewing.give:
     description: Allows giving Master Brewing Stands
     default: op

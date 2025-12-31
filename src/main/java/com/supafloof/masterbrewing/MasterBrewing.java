@@ -23,6 +23,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.inventory.BrewEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
@@ -91,6 +92,15 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     // Track active master potion effects per player
     // Map: Player UUID -> List of active effects with expiry times
     private Map<UUID, List<ActiveMasterEffect>> activeMasterEffects = new HashMap<>();
+    
+    // Track virtual master brewing stand inventories opened via command
+    // Map: Player UUID -> Inventory (tracks which player has which virtual stand open)
+    private Map<UUID, org.bukkit.inventory.Inventory> virtualBrewingStands = new HashMap<>();
+    
+    // Fuel level tracking for virtual brewing stands (1 blaze powder = 20 fuel)
+    // Only holds data for CURRENTLY OPEN stands - loaded from disk on open, saved on close
+    // Map: Player UUID -> fuel level remaining
+    private Map<UUID, Integer> virtualBrewingFuel = new HashMap<>();
     
     // Configuration: upgrade tiers
     // Map: level -> [redstone cost, duration in seconds]
@@ -292,6 +302,12 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             loadPlayerEffects(player.getUniqueId());
         }
         
+        // Create playerdata directory for virtual brewing stand data
+        File playerDataDir = new File(getDataFolder(), "playerdata");
+        if (!playerDataDir.exists()) {
+            playerDataDir.mkdirs();
+        }
+        
         // Final success message
         getLogger().info("MasterBrewing plugin enabled!");
     }
@@ -317,6 +333,23 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         for (UUID uuid : activeMasterEffects.keySet()) {
             List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
             savePlayerEffects(uuid, effects);
+        }
+        
+        // Save any currently open virtual brewing stands
+        for (Map.Entry<UUID, org.bukkit.inventory.Inventory> entry : virtualBrewingStands.entrySet()) {
+            UUID playerUUID = entry.getKey();
+            org.bukkit.inventory.Inventory inv = entry.getValue();
+            
+            ItemStack[] contents = new ItemStack[inv.getSize()];
+            for (int i = 0; i < inv.getSize(); i++) {
+                ItemStack item = inv.getItem(i);
+                if (item != null) {
+                    contents[i] = item.clone();
+                }
+            }
+            
+            int fuelLevel = virtualBrewingFuel.getOrDefault(playerUUID, 0);
+            savePlayerBrewingData(playerUUID, contents, fuelLevel);
         }
         
         getLogger().info("MasterBrewing plugin disabled!");
@@ -1255,391 +1288,41 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
      * Processes master brewing upgrades
      */
     private void processMasterBrew(BrewerInventory inv, ItemStack ingredient, boolean isRedstone, boolean isGlowstone) {
-        // Collect all valid potions that can be upgraded
+        // Get cost from first valid potion
+        int materialCost = -1;
         List<ItemStack> potionsToUpgrade = new ArrayList<>();
-        int materialCost = 0;
-        int upgradeDuration = 0;
         
-        // Determine the upgrade level and cost based on the FIRST valid potion
-        // All potions in the stand will be upgraded to the same level
         for (int slot = 0; slot < 3; slot++) {
             ItemStack potion = inv.getItem(slot);
-            
-            if (potion == null || !isPotion(potion)) {
-                continue;
-            }
-            
-            // Get current levels
-            ItemMeta meta = potion.getItemMeta();
-            if (meta == null) {
-                continue;
-            }
-            
-            int currentTimeLevel = meta.getPersistentDataContainer().getOrDefault(potionTimeLevelKey, PersistentDataType.INTEGER, 0);
-            int currentPowerLevel = meta.getPersistentDataContainer().getOrDefault(potionPowerLevelKey, PersistentDataType.INTEGER, 0);
-            
-            // Get effect type key from NBT (handles both normal and fly potions)
-            String effectTypeKey = meta.getPersistentDataContainer().get(potionEffectTypeKey, PersistentDataType.STRING);
-            if (effectTypeKey == null) {
-                // Not a master potion, try to get base effect
-                PotionEffectType effectType = getBasePotionEffect(potion);
-                if (effectType == null) {
-                    // Can't determine effect type - skip this potion
-                    continue;
-                }
-                effectTypeKey = effectType.getKey().getKey();
-            }
-            
-            // Check if this potion can be upgraded
-            boolean canUpgrade = false;
-            
-            if (isRedstone) {
-                // Instant effects cannot be upgraded with redstone (no duration)
-                if (isInstantEffect(effectTypeKey)) {
-                    continue; // Skip this potion - cannot upgrade time on instant effects
-                }
-                int nextLevel = currentTimeLevel + 1;
-                int potionMaxTimeLevel = getMaxTimeLevel(effectTypeKey);
-                if (nextLevel <= potionMaxTimeLevel) {
-                    Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectTypeKey);
-                    int[] upgrade = potionTimeUpgrades.get(nextLevel);
-                    if (upgrade != null) {
-                        canUpgrade = true;
-                        // Calculate material cost from FIRST valid potion only
-                        if (potionsToUpgrade.isEmpty()) {
-                            materialCost = upgrade[0];
-                            upgradeDuration = upgrade[1];
-                        }
-                    }
-                }
-            } else if (isGlowstone) {
-                int nextLevel = currentPowerLevel + 1;
-                int potionMaxPowerLevel = getMaxPowerLevel(effectTypeKey);
-                if (nextLevel <= potionMaxPowerLevel) {
-                    Map<Integer, Integer> potionPowerUpgrades = getPowerUpgrades(effectTypeKey);
-                    Integer glowstoneCost = potionPowerUpgrades.get(nextLevel);
-                    if (glowstoneCost != null) {
-                        canUpgrade = true;
-                        // Calculate material cost from FIRST valid potion only
-                        if (potionsToUpgrade.isEmpty()) {
-                            materialCost = glowstoneCost;
-                        }
-                    }
-                }
-            }
-            
-            // Only add to upgrade list if it can actually be upgraded
-            if (canUpgrade) {
+            int cost = getUpgradeCost(potion, isRedstone, isGlowstone);
+            if (cost > 0) {
                 potionsToUpgrade.add(potion);
+                if (materialCost < 0) {
+                    materialCost = cost;
+                }
             }
         }
         
-        // Check if we have any potions to upgrade
-        if (potionsToUpgrade.isEmpty()) {
+        if (potionsToUpgrade.isEmpty() || materialCost < 0) {
             return;
         }
         
-        // Check if we have enough materials for the upgrade
         if (ingredient.getAmount() < materialCost) {
             return;
         }
         
-        // Apply upgrade to ALL potions
+        // Upgrade all valid potions
         for (ItemStack potion : potionsToUpgrade) {
-            PotionMeta meta = (PotionMeta) potion.getItemMeta();
-            
-            int currentTimeLevel = meta.getPersistentDataContainer().getOrDefault(potionTimeLevelKey, PersistentDataType.INTEGER, 0);
-            int currentPowerLevel = meta.getPersistentDataContainer().getOrDefault(potionPowerLevelKey, PersistentDataType.INTEGER, 0);
-            
-            String effectTypeKey = meta.getPersistentDataContainer().get(potionEffectTypeKey, PersistentDataType.STRING);
-            if (effectTypeKey == null) {
-                PotionEffectType effectType = getBasePotionEffect(potion);
-                if (effectType != null) {
-                    effectTypeKey = effectType.getKey().getKey();
-                }
-            }
-            
-            PotionEffectType effectType = null;
-            if (effectTypeKey != null && !effectTypeKey.equals("fly") && !effectTypeKey.equals("fortune")) {
-                effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectTypeKey));
-            }
-            
-            // Update levels based on upgrade type
-            int newTimeLevel = currentTimeLevel;
-            int newPowerLevel = currentPowerLevel;
-            
-            if (isRedstone) {
-                newTimeLevel = currentTimeLevel + 1;
-            } else if (isGlowstone) {
-                newPowerLevel = currentPowerLevel + 1;
-            }
-            
-            // Store updated levels
-            meta.getPersistentDataContainer().set(potionTimeLevelKey, PersistentDataType.INTEGER, newTimeLevel);
-            meta.getPersistentDataContainer().set(potionPowerLevelKey, PersistentDataType.INTEGER, newPowerLevel);
-            meta.getPersistentDataContainer().set(potionEffectTypeKey, PersistentDataType.STRING, effectTypeKey);
-            meta.getPersistentDataContainer().set(masterPotionKey, PersistentDataType.BYTE, (byte) 1);
-        
-        // Get duration
-        int duration;
-        if (newTimeLevel == 0) {
-            // Check if duration is already stored
-            if (meta.getPersistentDataContainer().has(potionDurationKey, PersistentDataType.INTEGER)) {
-                duration = meta.getPersistentDataContainer().get(potionDurationKey, PersistentDataType.INTEGER);
-            } else {
-                // For fly/fortune at level 0, use 180 seconds
-                if (effectTypeKey.equals("fly") || effectTypeKey.equals("fortune")) {
-                    duration = 180;
-                } else if (effectType != null) {
-                    // Extract vanilla potion duration before we clear it
-                    duration = extractVanillaPotionDuration(meta, effectType);
-                } else {
-                    duration = 180;
-                }
-            }
-        } else {
-            // Use config duration for non-zero levels
-            Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectTypeKey);
-            duration = potionTimeUpgrades.get(newTimeLevel)[1];
+            upgradeMasterPotion(potion, isRedstone, isGlowstone);
         }
         
-        // Update duration if this was a time upgrade
-        if (isRedstone) {
-            duration = upgradeDuration;
-        } else {
-            // Keep existing duration for power upgrades
-            if (meta.getPersistentDataContainer().has(potionDurationKey, PersistentDataType.INTEGER)) {
-                duration = meta.getPersistentDataContainer().get(potionDurationKey, PersistentDataType.INTEGER);
-            } else {
-                // For fly/fortune at level 0, use 180 seconds
-                if (effectTypeKey.equals("fly") || effectTypeKey.equals("fortune")) {
-                    duration = 180;
-                } else if (effectType != null) {
-                    // Extract vanilla potion duration before we clear it
-                    duration = extractVanillaPotionDuration(meta, effectType);
-                } else {
-                    duration = 180;
-                }
-            }
-        }
-        
-        // Store duration in NBT
-        meta.getPersistentDataContainer().set(potionDurationKey, PersistentDataType.INTEGER, duration);
-        
-        // Clear base potion type to remove vanilla text
-        meta.setBasePotionType(PotionType.WATER);
-        
-        // Set the correct color for this effect type
-        if (effectTypeKey.equals("fly")) {
-            meta.setColor(org.bukkit.Color.ORANGE);
-        } else if (effectTypeKey.equals("fortune")) {
-            meta.setColor(org.bukkit.Color.LIME); // Green for luck/fortune
-        } else {
-            meta.setColor(getPotionColor(effectType));
-        }
-        
-        // Add custom effect - this displays the correct vanilla effect information (skip for fly)
-        meta.clearCustomEffects();
-        if (effectTypeKey.equals("fortune")) {
-            // Fortune uses LUCK potion effect
-            PotionEffectType luckEffect = PotionEffectType.LUCK;
-            meta.addCustomEffect(new PotionEffect(luckEffect, duration * 20, newPowerLevel, false, false, false), true);
-        } else if (!effectTypeKey.equals("fly") && effectType != null) {
-            meta.addCustomEffect(new PotionEffect(effectType, duration * 20, newPowerLevel, false, false, false), true);
-        }
-        
-        // Update display name
-        String effectName;
-        if (effectTypeKey.equals("fly")) {
-            effectName = "Fly";
-        } else if (effectTypeKey.equals("fortune")) {
-            effectName = "Fortune";
-        } else {
-            effectName = formatEffectName(effectType);
-        }
-        int displayLevel = newPowerLevel + 1; // Power level 0 = I, 1 = II, etc.
-        String romanLevel = toRoman(displayLevel);
-        
-        Component name = Component.text(effectName + " " + romanLevel, NamedTextColor.GOLD, TextDecoration.ITALIC)
-            .decoration(TextDecoration.ITALIC, true);
-        meta.displayName(name);
-        
-        // Update lore
-        List<Component> lore = new ArrayList<>();
-        lore.add(Component.text("Master Potion", NamedTextColor.LIGHT_PURPLE)
-            .decoration(TextDecoration.ITALIC, false));
-        
-        // Get max levels for this potion type
-        int potionMaxPowerLevel = getMaxPowerLevel(effectTypeKey);
-        int potionMaxTimeLevel = getMaxTimeLevel(effectTypeKey);
-        Map<Integer, Integer> potionPowerUpgrades = getPowerUpgrades(effectTypeKey);
-        Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectTypeKey);
-        
-        // Calculate max duration (highest duration value in time upgrades)
-        int maxDuration = 0;
-        for (int[] timeUpgrade : potionTimeUpgrades.values()) {
-            if (timeUpgrade[1] > maxDuration) {
-                maxDuration = timeUpgrade[1];
-            }
-        }
-        
-        // Add fly-specific lore
-        if (effectTypeKey.equals("fly")) {
-            // Calculate flight speed
-            float flightSpeed = 0.1f * (1.0f + (newPowerLevel * 0.2f));
-            flightSpeed = Math.min(flightSpeed, 1.0f);
-            int speedPercent = (int)((flightSpeed / 0.1f) * 100);
-            
-            // Check if at max levels
-            boolean atMaxSpeed = newPowerLevel >= potionMaxPowerLevel;
-            boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
-            
-            // Flight speed line
-            if (atMaxSpeed) {
-                lore.add(Component.text("Flight Speed: " + speedPercent + "% (MAX)", NamedTextColor.AQUA)
-                    .decoration(TextDecoration.ITALIC, false));
-            } else {
-                // Calculate max speed
-                float maxFlightSpeed = 0.1f * (1.0f + (potionMaxPowerLevel * 0.2f));
-                maxFlightSpeed = Math.min(maxFlightSpeed, 1.0f);
-                int maxSpeedPercent = (int)((maxFlightSpeed / 0.1f) * 100);
-                lore.add(Component.text("Flight Speed: " + speedPercent + "% (Max: " + maxSpeedPercent + "%)", NamedTextColor.AQUA)
-                    .decoration(TextDecoration.ITALIC, false));
-            }
-            
-            // Duration line
-            if (atMaxDuration) {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
-                    .decoration(TextDecoration.ITALIC, false));
-            } else {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
-                    .decoration(TextDecoration.ITALIC, false));
-            }
-            
-            // Add upgrade cost lines if not at max
-            if (!atMaxSpeed) {
-                int nextPowerLevel = newPowerLevel + 1;
-                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
-                if (glowstoneCost != null) {
-                    lore.add(Component.text("Flight Speed Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
-                        .decoration(TextDecoration.ITALIC, false));
-                }
-            }
-            
-            if (!atMaxDuration) {
-                int nextTimeLevel = newTimeLevel + 1;
-                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
-                if (timeUpgrade != null) {
-                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
-                        .decoration(TextDecoration.ITALIC, false));
-                }
-            }
-            
-        } else if (effectTypeKey.equals("fortune")) {
-            // Check if at max levels
-            boolean atMaxLuck = newPowerLevel >= potionMaxPowerLevel;
-            boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
-            
-            // Luck line
-            if (atMaxLuck) {
-                lore.add(Component.text("Luck: +" + (newPowerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
-                    .decoration(TextDecoration.ITALIC, false));
-            } else {
-                lore.add(Component.text("Luck: +" + (newPowerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
-                    .decoration(TextDecoration.ITALIC, false));
-            }
-            
-            // Duration line
-            if (atMaxDuration) {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
-                    .decoration(TextDecoration.ITALIC, false));
-            } else {
-                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
-                    .decoration(TextDecoration.ITALIC, false));
-            }
-            
-            // Add upgrade cost lines if not at max
-            if (!atMaxLuck) {
-                int nextPowerLevel = newPowerLevel + 1;
-                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
-                if (glowstoneCost != null) {
-                    lore.add(Component.text("Luck Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
-                        .decoration(TextDecoration.ITALIC, false));
-                }
-            }
-            
-            if (!atMaxDuration) {
-                int nextTimeLevel = newTimeLevel + 1;
-                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
-                if (timeUpgrade != null) {
-                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
-                        .decoration(TextDecoration.ITALIC, false));
-                }
-            }
-        } else {
-            // Standard potion lore (for vanilla effects like speed, strength, etc.)
-            boolean atMaxPower = newPowerLevel >= potionMaxPowerLevel;
-            boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
-            boolean isInstant = isInstantEffect(effectTypeKey);
-            
-            // Power line
-            String powerLabel = effectName;
-            if (atMaxPower) {
-                lore.add(Component.text(powerLabel + ": +" + (newPowerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
-                    .decoration(TextDecoration.ITALIC, false));
-            } else {
-                lore.add(Component.text(powerLabel + ": +" + (newPowerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
-                    .decoration(TextDecoration.ITALIC, false));
-            }
-            
-            // Duration line (skip for instant effects)
-            if (!isInstant) {
-                if (atMaxDuration) {
-                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
-                        .decoration(TextDecoration.ITALIC, false));
-                } else {
-                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
-                        .decoration(TextDecoration.ITALIC, false));
-                }
-            } else {
-                // Show "Instant" label for instant effects
-                lore.add(Component.text("Duration: Instant", NamedTextColor.YELLOW)
-                    .decoration(TextDecoration.ITALIC, false));
-            }
-            
-            // Add upgrade cost lines if not at max
-            if (!atMaxPower) {
-                int nextPowerLevel = newPowerLevel + 1;
-                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
-                if (glowstoneCost != null) {
-                    lore.add(Component.text(powerLabel + " Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
-                        .decoration(TextDecoration.ITALIC, false));
-                }
-            }
-            
-            // Duration upgrade line (skip for instant effects - they can't be upgraded with redstone)
-            if (!isInstant && !atMaxDuration) {
-                int nextTimeLevel = newTimeLevel + 1;
-                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
-                if (timeUpgrade != null) {
-                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
-                        .decoration(TextDecoration.ITALIC, false));
-                }
-            }
-        }
-        
-        meta.lore(lore);
-        
-        potion.setItemMeta(meta);
-    }
-        
-        // Consume materials - must use setIngredient to update the actual inventory
+        // Consume materials
         int newAmount = ingredient.getAmount() - materialCost;
         if (newAmount <= 0) {
             inv.setIngredient(null);
         } else {
             ingredient.setAmount(newAmount);
-            inv.setIngredient(ingredient); // Actually update the brewing stand inventory
+            inv.setIngredient(ingredient);
         }
     }
     
@@ -1983,7 +1666,501 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         }
     }
     
+    /**
+     * Saves virtual brewing stand contents for all players to disk
+     * Called asynchronously during normal operation
+     */
+    /**
+     * Saves a player's virtual brewing stand data to their individual file
+     * 
+     * @param playerUUID The player's UUID
+     * @param contents The inventory contents (5 slots)
+     * @param fuelLevel The current fuel level (0-20)
+     */
+    private void savePlayerBrewingData(UUID playerUUID, ItemStack[] contents, int fuelLevel) {
+        File playerFile = new File(getDataFolder(), "playerdata/" + playerUUID.toString() + ".yml");
+        
+        // Check if there's anything to save
+        boolean hasContent = false;
+        for (ItemStack item : contents) {
+            if (item != null) {
+                hasContent = true;
+                break;
+            }
+        }
+        
+        // If no content and no fuel, delete the file if it exists
+        if (!hasContent && fuelLevel <= 0) {
+            if (playerFile.exists()) {
+                playerFile.delete();
+            }
+            return;
+        }
+        
+        org.bukkit.configuration.file.YamlConfiguration config = new org.bukkit.configuration.file.YamlConfiguration();
+        
+        // Serialize each slot
+        for (int i = 0; i < contents.length; i++) {
+            if (contents[i] != null) {
+                String base64 = itemStackToBase64(contents[i]);
+                config.set("slot" + i, base64);
+            }
+        }
+        
+        // Save fuel level
+        if (fuelLevel > 0) {
+            config.set("fuel", fuelLevel);
+        }
+        
+        try {
+            config.save(playerFile);
+        } catch (Exception e) {
+            getLogger().warning("Failed to save brewing data for " + playerUUID + ": " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Loads a player's virtual brewing stand data from their individual file
+     * 
+     * @param playerUUID The player's UUID
+     * @return A two-element array: [0] = ItemStack[] contents, [1] = Integer fuel level
+     *         Returns null contents and 0 fuel if no data exists
+     */
+    private Object[] loadPlayerBrewingData(UUID playerUUID) {
+        File playerFile = new File(getDataFolder(), "playerdata/" + playerUUID.toString() + ".yml");
+        
+        ItemStack[] contents = new ItemStack[5];
+        int fuelLevel = 0;
+        
+        if (!playerFile.exists()) {
+            return new Object[] { contents, fuelLevel };
+        }
+        
+        try {
+            org.bukkit.configuration.file.YamlConfiguration config = 
+                org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(playerFile);
+            
+            // Load each slot
+            for (int i = 0; i < 5; i++) {
+                String base64 = config.getString("slot" + i);
+                if (base64 != null) {
+                    contents[i] = itemStackFromBase64(base64);
+                }
+            }
+            
+            // Load fuel level
+            fuelLevel = config.getInt("fuel", 0);
+            
+        } catch (Exception e) {
+            getLogger().warning("Failed to load brewing data for " + playerUUID + ": " + e.getMessage());
+        }
+        
+        return new Object[] { contents, fuelLevel };
+    }
+    
+    /**
+     * Serializes an ItemStack to a Base64 string
+     */
+    private String itemStackToBase64(ItemStack item) {
+        try {
+            java.io.ByteArrayOutputStream outputStream = new java.io.ByteArrayOutputStream();
+            org.bukkit.util.io.BukkitObjectOutputStream dataOutput = new org.bukkit.util.io.BukkitObjectOutputStream(outputStream);
+            dataOutput.writeObject(item);
+            dataOutput.close();
+            return Base64.getEncoder().encodeToString(outputStream.toByteArray());
+        } catch (Exception e) {
+            getLogger().warning("Failed to serialize ItemStack: " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Deserializes an ItemStack from a Base64 string
+     */
+    private ItemStack itemStackFromBase64(String base64) {
+        try {
+            java.io.ByteArrayInputStream inputStream = new java.io.ByteArrayInputStream(Base64.getDecoder().decode(base64));
+            org.bukkit.util.io.BukkitObjectInputStream dataInput = new org.bukkit.util.io.BukkitObjectInputStream(inputStream);
+            ItemStack item = (ItemStack) dataInput.readObject();
+            dataInput.close();
+            return item;
+        } catch (Exception e) {
+            getLogger().warning("Failed to deserialize ItemStack: " + e.getMessage());
+            return null;
+        }
+    }
+    
     // ==================== HELPER METHODS ====================
+    
+    /**
+     * Upgrades a master potion with the given ingredient
+     * This is the SINGLE code path for all potion upgrades - real and virtual brewing stands
+     * 
+     * @param potion The potion to upgrade
+     * @param isRedstone True if upgrading with redstone (duration)
+     * @param isGlowstone True if upgrading with glowstone (power)
+     * @return The material cost consumed, or -1 if upgrade failed
+     */
+    private int upgradeMasterPotion(ItemStack potion, boolean isRedstone, boolean isGlowstone) {
+        if (potion == null || !isPotion(potion)) {
+            return -1;
+        }
+        
+        PotionMeta meta = (PotionMeta) potion.getItemMeta();
+        if (meta == null) {
+            return -1;
+        }
+        
+        // Get current levels
+        int currentTimeLevel = meta.getPersistentDataContainer().getOrDefault(potionTimeLevelKey, PersistentDataType.INTEGER, 0);
+        int currentPowerLevel = meta.getPersistentDataContainer().getOrDefault(potionPowerLevelKey, PersistentDataType.INTEGER, 0);
+        
+        // Get effect type
+        String effectTypeKey = meta.getPersistentDataContainer().get(potionEffectTypeKey, PersistentDataType.STRING);
+        if (effectTypeKey == null) {
+            PotionEffectType effectType = getBasePotionEffect(potion);
+            if (effectType == null) {
+                return -1;
+            }
+            effectTypeKey = effectType.getKey().getKey();
+        }
+        
+        // Determine upgrade parameters
+        int materialCost = 0;
+        int newTimeLevel = currentTimeLevel;
+        int newPowerLevel = currentPowerLevel;
+        int upgradeDuration = 0;
+        
+        if (isRedstone) {
+            if (isInstantEffect(effectTypeKey)) {
+                return -1; // Can't upgrade instant effects with redstone
+            }
+            int nextLevel = currentTimeLevel + 1;
+            int potionMaxTimeLevel = getMaxTimeLevel(effectTypeKey);
+            if (nextLevel > potionMaxTimeLevel) {
+                return -1; // Already at max
+            }
+            Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectTypeKey);
+            int[] upgrade = potionTimeUpgrades.get(nextLevel);
+            if (upgrade == null) {
+                return -1;
+            }
+            materialCost = upgrade[0];
+            upgradeDuration = upgrade[1];
+            newTimeLevel = nextLevel;
+        } else if (isGlowstone) {
+            int nextLevel = currentPowerLevel + 1;
+            int potionMaxPowerLevel = getMaxPowerLevel(effectTypeKey);
+            if (nextLevel > potionMaxPowerLevel) {
+                return -1; // Already at max
+            }
+            Map<Integer, Integer> potionPowerUpgrades = getPowerUpgrades(effectTypeKey);
+            Integer glowstoneCost = potionPowerUpgrades.get(nextLevel);
+            if (glowstoneCost == null) {
+                return -1;
+            }
+            materialCost = glowstoneCost;
+            newPowerLevel = nextLevel;
+        } else {
+            return -1;
+        }
+        
+        // Calculate duration
+        int duration;
+        if (isRedstone) {
+            duration = upgradeDuration;
+        } else {
+            // Keep existing duration for power upgrades
+            if (meta.getPersistentDataContainer().has(potionDurationKey, PersistentDataType.INTEGER)) {
+                duration = meta.getPersistentDataContainer().get(potionDurationKey, PersistentDataType.INTEGER);
+            } else {
+                if (effectTypeKey.equals("fly") || effectTypeKey.equals("fortune")) {
+                    duration = 180;
+                } else {
+                    PotionEffectType effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectTypeKey));
+                    if (effectType != null) {
+                        duration = extractVanillaPotionDuration(meta, effectType);
+                    } else {
+                        duration = 180;
+                    }
+                }
+            }
+        }
+        
+        // Get effect type for display
+        PotionEffectType effectType = null;
+        if (!effectTypeKey.equals("fly") && !effectTypeKey.equals("fortune")) {
+            effectType = PotionEffectType.getByKey(org.bukkit.NamespacedKey.minecraft(effectTypeKey));
+        }
+        
+        // Update NBT
+        meta.getPersistentDataContainer().set(potionTimeLevelKey, PersistentDataType.INTEGER, newTimeLevel);
+        meta.getPersistentDataContainer().set(potionPowerLevelKey, PersistentDataType.INTEGER, newPowerLevel);
+        meta.getPersistentDataContainer().set(potionDurationKey, PersistentDataType.INTEGER, duration);
+        meta.getPersistentDataContainer().set(potionEffectTypeKey, PersistentDataType.STRING, effectTypeKey);
+        meta.getPersistentDataContainer().set(masterPotionKey, PersistentDataType.BYTE, (byte) 1);
+        
+        // Clear base potion type
+        meta.setBasePotionType(PotionType.WATER);
+        
+        // Update display (color, effects, name, lore)
+        updateMasterPotionDisplay(meta, effectTypeKey, effectType, newTimeLevel, newPowerLevel, duration);
+        
+        potion.setItemMeta(meta);
+        return materialCost;
+    }
+    
+    /**
+     * Gets the material cost for the next upgrade without applying it
+     * 
+     * @param potion The potion to check
+     * @param isRedstone True if checking redstone upgrade
+     * @param isGlowstone True if checking glowstone upgrade
+     * @return The material cost, or -1 if upgrade not possible
+     */
+    private int getUpgradeCost(ItemStack potion, boolean isRedstone, boolean isGlowstone) {
+        if (potion == null || !isPotion(potion)) {
+            return -1;
+        }
+        
+        ItemMeta meta = potion.getItemMeta();
+        if (meta == null) {
+            return -1;
+        }
+        
+        int currentTimeLevel = meta.getPersistentDataContainer().getOrDefault(potionTimeLevelKey, PersistentDataType.INTEGER, 0);
+        int currentPowerLevel = meta.getPersistentDataContainer().getOrDefault(potionPowerLevelKey, PersistentDataType.INTEGER, 0);
+        
+        String effectTypeKey = meta.getPersistentDataContainer().get(potionEffectTypeKey, PersistentDataType.STRING);
+        if (effectTypeKey == null) {
+            PotionEffectType effectType = getBasePotionEffect(potion);
+            if (effectType == null) {
+                return -1;
+            }
+            effectTypeKey = effectType.getKey().getKey();
+        }
+        
+        if (isRedstone) {
+            if (isInstantEffect(effectTypeKey)) {
+                return -1;
+            }
+            int nextLevel = currentTimeLevel + 1;
+            if (nextLevel > getMaxTimeLevel(effectTypeKey)) {
+                return -1;
+            }
+            Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectTypeKey);
+            int[] upgrade = potionTimeUpgrades.get(nextLevel);
+            return (upgrade != null) ? upgrade[0] : -1;
+        } else if (isGlowstone) {
+            int nextLevel = currentPowerLevel + 1;
+            if (nextLevel > getMaxPowerLevel(effectTypeKey)) {
+                return -1;
+            }
+            Map<Integer, Integer> potionPowerUpgrades = getPowerUpgrades(effectTypeKey);
+            Integer cost = potionPowerUpgrades.get(nextLevel);
+            return (cost != null) ? cost : -1;
+        }
+        return -1;
+    }
+    
+    /**
+     * Updates a master potion's display name, lore, color, and effects
+     * This is the single source of truth for how master potions are displayed
+     * 
+     * @param meta The potion meta to update
+     * @param effectTypeKey The effect identifier (e.g., "speed", "fly", "fortune")
+     * @param effectType The PotionEffectType (null for fly)
+     * @param newTimeLevel The current time upgrade level
+     * @param newPowerLevel The current power upgrade level
+     * @param duration The duration in seconds
+     */
+    private void updateMasterPotionDisplay(PotionMeta meta, String effectTypeKey, PotionEffectType effectType, 
+                                           int newTimeLevel, int newPowerLevel, int duration) {
+        // Set color
+        if (effectTypeKey.equals("fly")) {
+            meta.setColor(org.bukkit.Color.ORANGE);
+        } else if (effectTypeKey.equals("fortune")) {
+            meta.setColor(org.bukkit.Color.LIME);
+        } else if (effectType != null) {
+            meta.setColor(getPotionColor(effectType));
+        }
+        
+        // Set custom effects
+        meta.clearCustomEffects();
+        if (effectTypeKey.equals("fortune")) {
+            PotionEffectType luckEffect = PotionEffectType.LUCK;
+            meta.addCustomEffect(new PotionEffect(luckEffect, duration * 20, newPowerLevel, false, false, false), true);
+        } else if (!effectTypeKey.equals("fly") && effectType != null) {
+            meta.addCustomEffect(new PotionEffect(effectType, duration * 20, newPowerLevel, false, false, false), true);
+        }
+        
+        // Set display name
+        String effectName;
+        if (effectTypeKey.equals("fly")) {
+            effectName = "Fly";
+        } else if (effectTypeKey.equals("fortune")) {
+            effectName = "Fortune";
+        } else {
+            effectName = formatEffectName(effectType);
+        }
+        int displayLevel = newPowerLevel + 1;
+        String romanLevel = toRoman(displayLevel);
+        
+        Component name = Component.text(effectName + " " + romanLevel, NamedTextColor.GOLD, TextDecoration.ITALIC)
+            .decoration(TextDecoration.ITALIC, true);
+        meta.displayName(name);
+        
+        // Build lore
+        List<Component> lore = new ArrayList<>();
+        lore.add(Component.text("Master Potion", NamedTextColor.LIGHT_PURPLE)
+            .decoration(TextDecoration.ITALIC, false));
+        
+        int potionMaxPowerLevel = getMaxPowerLevel(effectTypeKey);
+        int potionMaxTimeLevel = getMaxTimeLevel(effectTypeKey);
+        Map<Integer, Integer> potionPowerUpgrades = getPowerUpgrades(effectTypeKey);
+        Map<Integer, int[]> potionTimeUpgrades = getTimeUpgrades(effectTypeKey);
+        
+        int maxDuration = 0;
+        for (int[] timeUpgrade : potionTimeUpgrades.values()) {
+            if (timeUpgrade[1] > maxDuration) {
+                maxDuration = timeUpgrade[1];
+            }
+        }
+        
+        if (effectTypeKey.equals("fly")) {
+            // Fly-specific lore
+            float flightSpeed = 0.1f * (1.0f + (newPowerLevel * 0.2f));
+            flightSpeed = Math.min(flightSpeed, 1.0f);
+            int speedPercent = (int)((flightSpeed / 0.1f) * 100);
+            
+            boolean atMaxSpeed = newPowerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
+            
+            if (atMaxSpeed) {
+                lore.add(Component.text("Flight Speed: " + speedPercent + "% (MAX)", NamedTextColor.AQUA)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                float maxFlightSpeed = 0.1f * (1.0f + (potionMaxPowerLevel * 0.2f));
+                maxFlightSpeed = Math.min(maxFlightSpeed, 1.0f);
+                int maxSpeedPercent = (int)((maxFlightSpeed / 0.1f) * 100);
+                lore.add(Component.text("Flight Speed: " + speedPercent + "% (Max: " + maxSpeedPercent + "%)", NamedTextColor.AQUA)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            if (!atMaxSpeed) {
+                int nextPowerLevel = newPowerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text("Flight Speed Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = newTimeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+        } else if (effectTypeKey.equals("fortune")) {
+            // Fortune-specific lore
+            boolean atMaxLuck = newPowerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
+            
+            if (atMaxLuck) {
+                lore.add(Component.text("Luck: +" + (newPowerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Luck: +" + (newPowerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            if (atMaxDuration) {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            if (!atMaxLuck) {
+                int nextPowerLevel = newPowerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text("Luck Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!atMaxDuration) {
+                int nextTimeLevel = newTimeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+        } else {
+            // Standard potion lore
+            boolean atMaxPower = newPowerLevel >= potionMaxPowerLevel;
+            boolean atMaxDuration = newTimeLevel >= potionMaxTimeLevel;
+            boolean isInstant = isInstantEffect(effectTypeKey);
+            
+            String powerLabel = effectName;
+            if (atMaxPower) {
+                lore.add(Component.text(powerLabel + ": +" + (newPowerLevel + 1) + " (MAX)", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lore.add(Component.text(powerLabel + ": +" + (newPowerLevel + 1) + " (Max: +" + (potionMaxPowerLevel + 1) + ")", NamedTextColor.GREEN)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            if (!isInstant) {
+                if (atMaxDuration) {
+                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (MAX)", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                } else {
+                    lore.add(Component.text("Duration: " + formatDuration(duration) + " (Max: " + formatDuration(maxDuration) + ")", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            } else {
+                lore.add(Component.text("Duration: Instant", NamedTextColor.YELLOW)
+                    .decoration(TextDecoration.ITALIC, false));
+            }
+            
+            if (!atMaxPower) {
+                int nextPowerLevel = newPowerLevel + 1;
+                Integer glowstoneCost = potionPowerUpgrades.get(nextPowerLevel);
+                if (glowstoneCost != null) {
+                    lore.add(Component.text(powerLabel + " Upgrade: " + glowstoneCost + " glowstone dust", NamedTextColor.GREEN)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+            
+            if (!isInstant && !atMaxDuration) {
+                int nextTimeLevel = newTimeLevel + 1;
+                int[] timeUpgrade = potionTimeUpgrades.get(nextTimeLevel);
+                if (timeUpgrade != null) {
+                    lore.add(Component.text("Duration Upgrade: " + timeUpgrade[0] + " redstone dust", NamedTextColor.YELLOW)
+                        .decoration(TextDecoration.ITALIC, false));
+                }
+            }
+        }
+        
+        meta.lore(lore);
+    }
     
     /**
      * Checks if an item is a potion
@@ -2185,7 +2362,19 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) {
-            sendHelp(sender);
+            // No args - open virtual master brewing stand if player has permission
+            if (!(sender instanceof Player)) {
+                sender.sendMessage(Component.text("This command can only be used by players!", NamedTextColor.RED));
+                return true;
+            }
+            
+            Player player = (Player) sender;
+            if (!player.hasPermission("masterbrewing.use")) {
+                player.sendMessage(Component.text("You don't have permission to use Master Brewing Stands!", NamedTextColor.RED));
+                return true;
+            }
+            
+            openVirtualBrewingStand(player);
             return true;
         }
         
@@ -2212,6 +2401,12 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         sender.sendMessage(Component.text("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", NamedTextColor.GOLD));
         sender.sendMessage(Component.text("Master Brewing Commands", NamedTextColor.GOLD, TextDecoration.BOLD));
         sender.sendMessage(Component.text("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", NamedTextColor.GOLD));
+        
+        if (sender.hasPermission("masterbrewing.use")) {
+            sender.sendMessage(Component.text("/masterbrewing", NamedTextColor.YELLOW)
+                .append(Component.text(" - Open a virtual Master Brewing Stand", NamedTextColor.GRAY)));
+        }
+        
         sender.sendMessage(Component.text("/masterbrewing help", NamedTextColor.YELLOW)
             .append(Component.text(" - Show this help menu", NamedTextColor.GRAY)));
         
@@ -2978,6 +3173,265 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         sender.sendMessage(Component.text("MasterBrewing configuration reloaded!", NamedTextColor.GREEN));
         
         return true;
+    }
+    
+    /**
+     * Opens a virtual Master Brewing Stand inventory for a player
+     * This allows players to use the /masterbrewing command to access a brewing GUI
+     * Note: Virtual brewing stands support the same upgrade mechanics as placed stands
+     * 
+     * @param player The player to open the virtual brewing stand for
+     */
+    private void openVirtualBrewingStand(Player player) {
+        org.bukkit.inventory.Inventory brewingInv = Bukkit.createInventory(null, InventoryType.BREWING, 
+            Component.text("Master Brewing Stand", NamedTextColor.GOLD, TextDecoration.BOLD));
+        
+        UUID playerUUID = player.getUniqueId();
+        
+        // Load player's data from their individual file
+        Object[] data = loadPlayerBrewingData(playerUUID);
+        ItemStack[] savedContents = (ItemStack[]) data[0];
+        int fuelLevel = (Integer) data[1];
+        
+        // Restore saved contents
+        for (int i = 0; i < savedContents.length && i < brewingInv.getSize(); i++) {
+            if (savedContents[i] != null) {
+                brewingInv.setItem(i, savedContents[i].clone());
+            }
+        }
+        
+        // Store fuel level in memory for this session
+        if (fuelLevel > 0) {
+            virtualBrewingFuel.put(playerUUID, fuelLevel);
+        }
+        
+        // Track this virtual brewing stand by player UUID
+        virtualBrewingStands.put(playerUUID, brewingInv);
+        
+        player.openInventory(brewingInv);
+        
+        // Update fuel display after a tick (needs inventory to be open first)
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            updateFuelDisplay(player);
+        }, 1L);
+    }
+    
+    /**
+     * Updates the fuel level display in the brewing stand GUI
+     * 
+     * @param player The player viewing the brewing stand
+     */
+    private void updateFuelDisplay(Player player) {
+        if (player.getOpenInventory() == null) return;
+        if (player.getOpenInventory().getTopInventory().getType() != InventoryType.BREWING) return;
+        
+        UUID playerUUID = player.getUniqueId();
+        int fuelLevel = virtualBrewingFuel.getOrDefault(playerUUID, 0);
+        
+        // FUEL_TIME property displays the fuel bar (0-20)
+        player.getOpenInventory().setProperty(org.bukkit.inventory.InventoryView.Property.FUEL_TIME, fuelLevel);
+    }
+    
+    /**
+     * Handles inventory close events to save and clean up virtual brewing stands
+     */
+    @EventHandler
+    public void onInventoryClose(InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player)) {
+            return;
+        }
+        
+        Player player = (Player) event.getPlayer();
+        UUID playerUUID = player.getUniqueId();
+        
+        // Check if this player has a virtual brewing stand open
+        if (!virtualBrewingStands.containsKey(playerUUID)) {
+            return;
+        }
+        
+        org.bukkit.inventory.Inventory closedInv = event.getView().getTopInventory();
+        
+        // Verify it's the same inventory type (brewing)
+        if (closedInv.getType() != InventoryType.BREWING) {
+            return;
+        }
+        
+        // Save the current contents
+        ItemStack[] contents = new ItemStack[closedInv.getSize()];
+        for (int i = 0; i < closedInv.getSize(); i++) {
+            ItemStack item = closedInv.getItem(i);
+            if (item != null) {
+                contents[i] = item.clone();
+            }
+        }
+        
+        // Get fuel level from memory
+        int fuelLevel = virtualBrewingFuel.getOrDefault(playerUUID, 0);
+        
+        // Save only THIS player's data to their individual file
+        savePlayerBrewingData(playerUUID, contents, fuelLevel);
+        
+        // Clean up in-memory tracking
+        virtualBrewingStands.remove(playerUUID);
+        virtualBrewingFuel.remove(playerUUID);
+    }
+    
+    /**
+     * Handles inventory click events for virtual brewing stands
+     * Processes brewing when items are placed in valid configuration
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onVirtualBrewingClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player)) {
+            return;
+        }
+        
+        Player player = (Player) event.getWhoClicked();
+        UUID playerUUID = player.getUniqueId();
+        
+        // Only handle virtual brewing stands
+        if (!virtualBrewingStands.containsKey(playerUUID)) {
+            return;
+        }
+        
+        getLogger().info("[VirtualBrew] Click detected in virtual brewing stand for " + player.getName());
+        
+        // Schedule brewing check after the click is processed
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            // Get the player's currently open inventory
+            if (player.getOpenInventory() == null) {
+                getLogger().info("[VirtualBrew] No open inventory");
+                return;
+            }
+            org.bukkit.inventory.Inventory topInv = player.getOpenInventory().getTopInventory();
+            if (topInv == null || topInv.getType() != InventoryType.BREWING) {
+                getLogger().info("[VirtualBrew] Not a brewing inventory");
+                return;
+            }
+            
+            processVirtualBrewing(topInv, playerUUID);
+            
+            // Always update fuel display after any click
+            updateFuelDisplay(player);
+        }, 2L);
+    }
+    
+    /**
+     * Handles inventory drag events for virtual brewing stands
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onVirtualBrewingDrag(org.bukkit.event.inventory.InventoryDragEvent event) {
+        if (!(event.getWhoClicked() instanceof Player)) {
+            return;
+        }
+        
+        Player player = (Player) event.getWhoClicked();
+        UUID playerUUID = player.getUniqueId();
+        
+        // Only handle virtual brewing stands
+        if (!virtualBrewingStands.containsKey(playerUUID)) {
+            return;
+        }
+        
+        // Schedule brewing check after the drag is processed
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            if (player.getOpenInventory() == null) return;
+            org.bukkit.inventory.Inventory topInv = player.getOpenInventory().getTopInventory();
+            if (topInv == null || topInv.getType() != InventoryType.BREWING) return;
+            
+            processVirtualBrewing(topInv, playerUUID);
+            
+            // Always update fuel display after any drag
+            updateFuelDisplay(player);
+        }, 2L);
+    }
+    
+    /**
+     * Processes brewing in a virtual Master Brewing Stand
+     * Checks if valid ingredients and potions are present, then performs the upgrade
+     * 
+     * @param inv The virtual brewing stand inventory
+     */
+    private void processVirtualBrewing(org.bukkit.inventory.Inventory inv, UUID playerUUID) {
+        int totalUpgrades = 0;
+        
+        // Loop until we can't upgrade anymore
+        while (true) {
+            ItemStack ingredient = inv.getItem(3);
+            if (ingredient == null) break;
+            
+            Material ingredientType = ingredient.getType();
+            boolean isRedstone = ingredientType == Material.REDSTONE;
+            boolean isGlowstone = ingredientType == Material.GLOWSTONE_DUST;
+            if (!isRedstone && !isGlowstone) break;
+            
+            // Check fuel
+            ItemStack fuel = inv.getItem(4);
+            int currentFuel = virtualBrewingFuel.getOrDefault(playerUUID, 0);
+            boolean hasBlazePowder = (fuel != null && fuel.getType() == Material.BLAZE_POWDER);
+            if (currentFuel <= 0 && !hasBlazePowder) break;
+            
+            // Find potions that can be upgraded and get cost
+            int materialCost = -1;
+            List<Integer> potionSlots = new ArrayList<>();
+            
+            for (int slot = 0; slot < 3; slot++) {
+                ItemStack potion = inv.getItem(slot);
+                int cost = getUpgradeCost(potion, isRedstone, isGlowstone);
+                if (cost > 0) {
+                    potionSlots.add(slot);
+                    if (materialCost < 0) {
+                        materialCost = cost;
+                    }
+                }
+            }
+            
+            if (potionSlots.isEmpty() || materialCost < 0) break;
+            if (ingredient.getAmount() < materialCost) break;
+            
+            // Consume fuel if needed
+            if (currentFuel <= 0) {
+                fuel.setAmount(fuel.getAmount() - 1);
+                if (fuel.getAmount() <= 0) {
+                    inv.setItem(4, null);
+                    fuel = null;
+                } else {
+                    inv.setItem(4, fuel);
+                }
+                currentFuel = 20;
+            }
+            currentFuel--;
+            virtualBrewingFuel.put(playerUUID, currentFuel);
+            
+            // Consume ingredient
+            ingredient.setAmount(ingredient.getAmount() - materialCost);
+            if (ingredient.getAmount() <= 0) {
+                inv.setItem(3, null);
+            } else {
+                inv.setItem(3, ingredient);
+            }
+            
+            // Upgrade all potions using the shared helper
+            for (int slot : potionSlots) {
+                ItemStack potion = inv.getItem(slot);
+                if (potion != null) {
+                    upgradeMasterPotion(potion, isRedstone, isGlowstone);
+                    inv.setItem(slot, potion);
+                }
+            }
+            
+            totalUpgrades++;
+        }
+        
+        if (totalUpgrades > 0) {
+            getLogger().info("[VirtualBrew] Completed " + totalUpgrades + " upgrade(s)");
+        }
+        
+        // Update fuel display
+        Player player = Bukkit.getPlayer(playerUUID);
+        if (player != null) {
+            updateFuelDisplay(player);
+        }
     }
     
     // ==================== TAB COMPLETION ====================

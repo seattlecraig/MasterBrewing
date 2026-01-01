@@ -1673,6 +1673,10 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     /**
      * Saves a player's virtual brewing stand data to their individual file
      * 
+     * IMPORTANT: This method must preserve existing active-effects data in the file.
+     * The playerdata file contains BOTH brewing stand data AND active potion effects.
+     * We must load the existing config first to avoid overwriting effect data.
+     * 
      * @param playerUUID The player's UUID
      * @param contents The inventory contents (5 slots)
      * @param fuelLevel The current fuel level (0-20)
@@ -1680,26 +1684,43 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     private void savePlayerBrewingData(UUID playerUUID, ItemStack[] contents, int fuelLevel) {
         File playerFile = new File(getDataFolder(), "playerdata/" + playerUUID.toString() + ".yml");
         
-        // Check if there's anything to save
-        boolean hasContent = false;
+        // Check if there's any brewing content to save
+        boolean hasBrewingContent = false;
         for (ItemStack item : contents) {
             if (item != null) {
-                hasContent = true;
+                hasBrewingContent = true;
                 break;
             }
         }
+        hasBrewingContent = hasBrewingContent || fuelLevel > 0;
         
-        // If no content and no fuel, delete the file if it exists
-        if (!hasContent && fuelLevel <= 0) {
+        // Load existing config to preserve active-effects data
+        org.bukkit.configuration.file.YamlConfiguration config;
+        if (playerFile.exists()) {
+            config = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(playerFile);
+        } else {
+            config = new org.bukkit.configuration.file.YamlConfiguration();
+        }
+        
+        // Check if there are active effects we need to preserve
+        boolean hasActiveEffects = config.contains("active-effects") && 
+                                   !config.getStringList("active-effects").isEmpty();
+        
+        // If no brewing content and no active effects, delete the file
+        if (!hasBrewingContent && !hasActiveEffects) {
             if (playerFile.exists()) {
                 playerFile.delete();
             }
             return;
         }
         
-        org.bukkit.configuration.file.YamlConfiguration config = new org.bukkit.configuration.file.YamlConfiguration();
+        // Clear old brewing slot data (in case slots were emptied)
+        for (int i = 0; i < 5; i++) {
+            config.set("slot" + i, null);
+        }
+        config.set("fuel", null);
         
-        // Serialize each slot
+        // Save current brewing slot contents
         for (int i = 0; i < contents.length; i++) {
             if (contents[i] != null) {
                 String base64 = itemStackToBase64(contents[i]);
@@ -1707,7 +1728,7 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             }
         }
         
-        // Save fuel level
+        // Save fuel level if present
         if (fuelLevel > 0) {
             config.set("fuel", fuelLevel);
         }

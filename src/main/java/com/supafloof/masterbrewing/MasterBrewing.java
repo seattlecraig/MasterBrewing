@@ -45,87 +45,359 @@ import java.util.stream.Collectors;
 import com.google.gson.Gson;
 
 /**
- * MasterBrewing Plugin
+ * ==================================================================================
+ * MasterBrewing Plugin - Enhanced Potion Brewing System for Minecraft
+ * ==================================================================================
  * 
- * Creates special Master Brewing Stands that support unlimited potion upgrades.
- * Re-brew potions with redstone to increase duration without changing power.
- * Re-brew potions with glowstone to increase power without changing duration.
+ * This plugin creates a custom brewing system that bypasses vanilla Minecraft's
+ * limitations on potion duration and power levels. It introduces "Master Brewing
+ * Stands" and "Master Potions" with the following capabilities:
  * 
- * Features:
- * - Special brewing stands with custom NBT tags
- * - Configurable upgrade tiers for duration (redstone) and power (glowstone)
- * - Supports unlimited levels based on config (max 64 redstone/glowstone per upgrade)
- * - Master potions display with gold/orange italic names
- * - Master potions show effect descriptions in lore
- * - Master potions activate instantly on right-click (no drinking animation)
- * - Continuous effect refresh system prevents premature expiration
- * - Persistent storage of active effects across logouts/server restarts
- * - Tracks current time level and power level via NBT on potions
- * - Admin commands to give special brewing stands
- * - Prevents vanilla brewing mechanics from interfering with master brews
+ * CORE FEATURES:
+ * --------------
+ * 1. UNLIMITED DURATION UPGRADES
+ *    - Use redstone dust to increase potion duration beyond vanilla limits
+ *    - Each upgrade tier requires more redstone for longer durations
+ *    - Configurable via config.yml (upgrade-time entries)
+ *    - Example: Level 1 = 10 minutes, Level 5 = 1 hour, Level 10 = 4 hours
  * 
- * Config Format:
- * upgrade-time: level,redstone-cost,duration-seconds
- * upgrade-power: level,glowstone-cost
+ * 2. UNLIMITED POWER UPGRADES
+ *    - Use glowstone dust to increase potion amplifier (strength)
+ *    - Each upgrade tier requires more glowstone
+ *    - Configurable via config.yml (upgrade-power entries)
+ *    - Example: Speed I → Speed II → Speed III → ... → Speed X
+ * 
+ * 3. CUSTOM EFFECTS
+ *    - FLY: Grants survival flight with configurable speed scaling per level
+ *    - FORTUNE: Enhanced luck effect for better loot drops from mobs/chests
+ *    - All 30+ vanilla potion effects are also supported
+ * 
+ * 4. INSTANT ACTIVATION
+ *    - Master potions activate instantly on right-click (no drinking animation)
+ *    - Prevents vanilla consumption mechanics from interfering
+ *    - Better for combat situations where timing matters
+ * 
+ * 5. EFFECT PERSISTENCE
+ *    - Active effects survive player logout/login
+ *    - Effects persist through server restarts
+ *    - Stored in per-player YAML files in plugins/MasterBrewing/playerdata/
+ * 
+ * 6. CONTINUOUS EFFECT REFRESH
+ *    - Background task refreshes effects every 3 seconds
+ *    - Bypasses vanilla's maximum duration limit (~10 minutes)
+ *    - Shows expiration warnings at 30s and 10s remaining
+ *    - Flight shows duration on action bar (HUD above hotbar)
+ * 
+ * 7. VIRTUAL BREWING STANDS
+ *    - Players can access brewing via /masterbrewing command (no physical block)
+ *    - Inventory contents persist per-player across sessions
+ *    - Supports same upgrade mechanics as physical stands
+ * 
+ * 8. PER-POTION CONFIGURATION
+ *    - Individual potions can have custom upgrade paths in config
+ *    - Override global costs/durations for specific effects
+ *    - Allows balancing (e.g., fly costs more than speed)
+ * 
+ * HOW BREWING WORKS:
+ * ------------------
+ * 1. Obtain a Master Brewing Stand via /masterbrewing give stand <player>
+ * 2. Place the stand and insert any vanilla potion with an effect
+ * 3. Add redstone dust to increase duration OR glowstone to increase power
+ * 4. The brew completes instantly, consuming materials based on config tier
+ * 5. The potion transforms into a Master Potion with upgraded stats
+ * 6. Master Potions display with gold italic names and detailed lore
+ * 7. Right-click to instantly consume and gain the effect
+ * 
+ * NBT DATA STRUCTURE:
+ * -------------------
+ * Master Brewing Stand items/blocks store:
+ * - masterbrewing:master_brewing_stand (BYTE=1) - Marker identifying master stands
+ * - When broken: Inventory slots serialized as JSON strings (brewingSlot0-4)
+ * - masterbrewing:brewing_fuel_level (INT) - Remaining fuel charges (0-20)
+ * 
+ * Master Potions store:
+ * - masterbrewing:master_potion (BYTE=1) - Marker identifying master potions
+ * - masterbrewing:potion_time_level (INT) - Current duration upgrade level (0=base)
+ * - masterbrewing:potion_power_level (INT) - Current amplifier level (0=level I)
+ * - masterbrewing:potion_duration (INT) - Total duration in seconds
+ * - masterbrewing:potion_effect_type (STRING) - Effect key (e.g., "speed", "fly")
+ * 
+ * CONFIG FORMAT (config.yml):
+ * ---------------------------
+ * upgrade-time:                    # Global duration upgrades (all potions)
+ *   - "1,4,600"                    # Level 1: 4 redstone = 600 seconds (10 min)
+ *   - "2,8,1200"                   # Level 2: 8 redstone = 1200 seconds (20 min)
+ *   - "3,16,2400"                  # Level 3: 16 redstone = 2400 seconds (40 min)
+ * 
+ * upgrade-power:                   # Global power upgrades (all potions)
+ *   - "1,4"                        # Level 1: 4 glowstone = amplifier 1 (II)
+ *   - "2,8"                        # Level 2: 8 glowstone = amplifier 2 (III)
+ *   - "3,16"                       # Level 3: 16 glowstone = amplifier 3 (IV)
+ * 
+ * speed:                           # Per-potion override example (optional)
+ *   upgrade-time:
+ *     - "1,2,300"                  # Speed has cheaper/shorter time upgrades
+ *   upgrade-power:
+ *     - "1,2"                      # Speed has cheaper power upgrades
+ * 
+ * PERMISSIONS:
+ * ------------
+ * masterbrewing.use   - Access /masterbrewing command (virtual brewing stand)
+ * masterbrewing.give  - Use /masterbrewing give commands (admin)
+ * masterbrewing.admin - Use /masterbrewing reload command
+ * 
+ * COMMANDS:
+ * ---------
+ * /masterbrewing              - Open virtual Master Brewing Stand GUI
+ * /masterbrewing help         - Show help menu with upgrade tier tables
+ * /masterbrewing give stand <player>  - Give Master Brewing Stand item
+ * /masterbrewing give potion <player> <type> [time] [power] - Give Master Potion
+ * /masterbrewing give potion <player> <type> max - Give max-level potion
+ * /masterbrewing give potion <player> random     - Give random potion type/levels
+ * /masterbrewing reload       - Reload configuration from disk
+ * 
+ * INTEGRATION NOTES:
+ * ------------------
+ * - Compatible with SpecialBooks plugin auto-pickup enchantment
+ * - Uses Paper/Spigot API with Adventure components for text formatting
+ * - Stores data using Bukkit's PersistentDataContainer (PDC) API
+ * - Uses Gson library for JSON serialization of ItemStacks
+ * - Effect persistence uses YAML configuration files
  * 
  * @author SupaFloof Games, LLC
  * @version 1.0.0
+ * @see <a href="https://playmc.supafloof.com">SupaFloof Minecraft Server</a>
  */
 public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter {
     
-    // Persistent data keys
+    // ==================================================================================
+    // NAMESPACED KEYS - Used for storing custom NBT data on items and blocks
+    // ==================================================================================
+    // All keys use format "masterbrewing:key_name" to ensure uniqueness across plugins.
+    // These keys are used with Bukkit's PersistentDataContainer (PDC) API.
+    
+    /**
+     * NBT key to mark an item or block as a Master Brewing Stand.
+     * Stored as BYTE with value 1 (true).
+     * Used on both ItemStack (inventory) and BlockState (placed block).
+     */
     private NamespacedKey masterBrewingStandKey;
+    
+    /**
+     * NBT key storing the current TIME (duration) upgrade level on a Master Potion.
+     * Stored as INTEGER. Value 0 = unupgraded base potion, 1+ = upgraded.
+     * This level determines which duration config entry to use.
+     */
     private NamespacedKey potionTimeLevelKey;
+    
+    /**
+     * NBT key storing the current POWER (amplifier) upgrade level on a Master Potion.
+     * Stored as INTEGER. Value 0 = base amplifier (level I), 1 = amplifier 1 (level II), etc.
+     * Directly maps to PotionEffect amplifier parameter (0-based internally).
+     */
     private NamespacedKey potionPowerLevelKey;
+    
+    /**
+     * NBT key storing the total duration of a Master Potion in SECONDS.
+     * Stored as INTEGER. This is the actual duration applied when consumed.
+     * Calculated from config based on time upgrade level.
+     */
     private NamespacedKey potionDurationKey;
+    
+    /**
+     * NBT key storing the effect type identifier of a Master Potion.
+     * Stored as STRING (e.g., "speed", "strength", "fly", "fortune").
+     * Used to look up PotionEffectType and determine which upgrade path to use.
+     */
     private NamespacedKey potionEffectTypeKey;
+    
+    /**
+     * NBT key marking an item as a Master Potion (vs regular vanilla potion).
+     * Stored as BYTE with value 1 (true).
+     * Enables instant-use behavior and prevents vanilla potion consumption.
+     */
     private NamespacedKey masterPotionKey;
     
-    // Brewing stand state keys
+    // ==================================================================================
+    // BREWING STAND INVENTORY PERSISTENCE KEYS
+    // ==================================================================================
+    // When a Master Brewing Stand block is broken, we serialize its inventory contents
+    // to the dropped item's NBT. This allows restoration when placed again.
+    // Each inventory slot gets its own key storing a JSON-serialized ItemStack.
+    
+    /** NBT key for brewing stand slot 0 (left potion bottle). Stored as JSON STRING. */
     private NamespacedKey brewingSlot0Key;
+    
+    /** NBT key for brewing stand slot 1 (middle potion bottle). Stored as JSON STRING. */
     private NamespacedKey brewingSlot1Key;
+    
+    /** NBT key for brewing stand slot 2 (right potion bottle). Stored as JSON STRING. */
     private NamespacedKey brewingSlot2Key;
+    
+    /** NBT key for brewing stand slot 3 (ingredient slot - top center). Stored as JSON STRING. */
     private NamespacedKey brewingSlot3Key;
+    
+    /** NBT key for brewing stand slot 4 (fuel slot - blaze powder). Stored as JSON STRING. */
     private NamespacedKey brewingSlot4Key;
+    
+    /** NBT key storing remaining fuel level (0-20) when stand is broken. Stored as INTEGER. */
     private NamespacedKey brewingFuelLevelKey;
     
-    // Track active master potion effects per player
-    // Map: Player UUID -> List of active effects with expiry times
+    // ==================================================================================
+    // RUNTIME DATA STRUCTURES - In-memory tracking for active sessions
+    // ==================================================================================
+    
+    /**
+     * Tracks active Master Potion effects for each online player.
+     * Map structure: Player UUID -> List of ActiveMasterEffect objects
+     * 
+     * This map is the authoritative source for what effects a player has.
+     * The background refresh task reads this map every 3 seconds to:
+     * - Check for expired effects and clean them up
+     * - Refresh effects that are close to expiring
+     * - Show flight status on action bar
+     * 
+     * Lifecycle:
+     * - Entry added when player consumes a Master Potion
+     * - Entry removed when all effects expire or player logs out
+     * - Loaded from disk (playerdata/*.yml) on player join
+     * - Saved to disk on player quit and plugin disable
+     * 
+     * Thread safety: All access occurs on main Bukkit thread (no sync needed)
+     */
     private Map<UUID, List<ActiveMasterEffect>> activeMasterEffects = new HashMap<>();
     
-    // Track virtual master brewing stand inventories opened via command
-    // Map: Player UUID -> Inventory (tracks which player has which virtual stand open)
+    /**
+     * Tracks currently open virtual Master Brewing Stand inventories.
+     * Map structure: Player UUID -> Bukkit Inventory object
+     * 
+     * Virtual brewing stands are opened via /masterbrewing command without
+     * requiring a physical block. This map tracks which players have them open
+     * so we can process brewing operations on inventory click events.
+     * 
+     * Lifecycle:
+     * - Entry added when player runs /masterbrewing (opens GUI)
+     * - Entry removed when player closes the inventory
+     * - Contents saved to playerdata file on close
+     */
     private Map<UUID, org.bukkit.inventory.Inventory> virtualBrewingStands = new HashMap<>();
     
-    // Fuel level tracking for virtual brewing stands (1 blaze powder = 20 fuel)
-    // Only holds data for CURRENTLY OPEN stands - loaded from disk on open, saved on close
-    // Map: Player UUID -> fuel level remaining
+    /**
+     * Tracks fuel levels for currently open virtual brewing stands.
+     * Map structure: Player UUID -> Remaining fuel charges (0-20)
+     * 
+     * Fuel is consumed during brewing (1 charge per brew operation).
+     * One blaze powder provides 20 fuel charges (same as vanilla).
+     * 
+     * IMPORTANT: This map only holds data while a virtual stand is OPEN.
+     * Data is loaded from disk when stand is opened, saved when closed.
+     * This prevents memory bloat from storing fuel for all players.
+     */
     private Map<UUID, Integer> virtualBrewingFuel = new HashMap<>();
     
-    // Configuration: upgrade tiers
-    // Map: level -> [redstone cost, duration in seconds]
+    // ==================================================================================
+    // CONFIGURATION DATA - Parsed from config.yml on enable/reload
+    // ==================================================================================
+    
+    /**
+     * Global time (duration) upgrade tiers applying to all potions by default.
+     * Map structure: Upgrade level -> [redstone cost, duration in seconds]
+     * 
+     * Example entries from config:
+     * - Level 1: [4, 600]   = 4 redstone dust for 600 seconds (10 minutes)
+     * - Level 5: [16, 3600] = 16 redstone dust for 3600 seconds (1 hour)
+     * 
+     * Using TreeMap ensures levels iterate in ascending order (1, 2, 3, ...).
+     * Individual potions can override these via potionUpgradePaths map.
+     */
     private Map<Integer, int[]> timeUpgrades = new TreeMap<>();
     
-    // Map: level -> glowstone cost
+    /**
+     * Global power (amplifier) upgrade tiers applying to all potions by default.
+     * Map structure: Upgrade level -> glowstone dust cost
+     * 
+     * Example entries from config:
+     * - Level 1: 4 glowstone  (results in amplifier 1, displayed as "II")
+     * - Level 5: 16 glowstone (results in amplifier 5, displayed as "VI")
+     * 
+     * Power upgrades don't have a duration component - they only increase
+     * the amplifier/strength of the effect.
+     */
     private Map<Integer, Integer> powerUpgrades = new TreeMap<>();
     
-    // Per-potion upgrade paths (effect key -> UpgradePath)
-    // If a potion isn't in this map, use the default timeUpgrades/powerUpgrades
+    /**
+     * Per-potion custom upgrade paths that override global defaults.
+     * Map structure: Effect key (e.g., "speed") -> UpgradePath object
+     * 
+     * Allows individual potions to have different costs/durations:
+     * - Fly potions might cost more than speed potions
+     * - Healing potions (instant) only support power upgrades
+     * - Specific potions can have unique tier structures
+     * 
+     * If a potion isn't in this map, it uses global timeUpgrades/powerUpgrades.
+     */
     private Map<String, UpgradePath> potionUpgradePaths = new HashMap<>();
     
-    // Max levels based on config
+    /**
+     * Highest time upgrade level available across ALL configurations.
+     * Calculated during config loading by finding max level in global + per-potion paths.
+     * Used for command validation and tab completion suggestions.
+     */
     private int maxTimeLevel = 0;
+    
+    /**
+     * Highest power upgrade level available across ALL configurations.
+     * Calculated during config loading by finding max level in global + per-potion paths.
+     * Used for command validation and tab completion suggestions.
+     */
     private int maxPowerLevel = 0;
     
-    // OPTIMIZATION #3: Static maps for O(1) potion name lookup instead of O(n) switch
+    // ==================================================================================
+    // STATIC LOOKUP TABLES - Initialized once at class load for O(1) lookups
+    // ==================================================================================
+    
+    /**
+     * Maps user-friendly potion names to internal Minecraft effect keys.
+     * Provides O(1) lookup performance instead of O(n) switch statements.
+     * 
+     * Key = User input name (command argument, e.g., "healing", "leaping")
+     * Value = Minecraft effect key (e.g., "instant_health", "jump_boost")
+     * 
+     * Special custom effect entries:
+     * - "fortune" -> "fortune" (uses LUCK internally but displayed as Fortune)
+     * - "fly" -> "fly" (custom effect, not a vanilla PotionEffectType)
+     * 
+     * This map is immutable after static initialization for thread safety.
+     */
     private static final Map<String, String> POTION_NAME_TO_EFFECT_KEY = createPotionNameMap();
     
-    // Instant effects that have no duration (cannot be upgraded with redstone)
+    /**
+     * Set of effect keys that are "instant" effects with no meaningful duration.
+     * Instant effects cannot be upgraded with redstone (time/duration upgrades).
+     * 
+     * Contents: instant_health, instant_damage, saturation
+     * 
+     * Why these are instant:
+     * - instant_health: Heals immediately when consumed
+     * - instant_damage: Damages immediately when consumed  
+     * - saturation: Restores hunger instantly
+     * 
+     * This set is immutable after static initialization.
+     */
     private static final Set<String> INSTANT_EFFECTS = createInstantEffectsSet();
     
     /**
-     * Creates the set of instant effect keys (effects with no duration)
-     * These effects cannot be upgraded with redstone (time upgrades)
+     * Creates the immutable set of instant effect keys.
+     * 
+     * Instant effects have no duration and cannot be upgraded with redstone.
+     * They apply their effect immediately upon consumption.
+     * 
+     * Why each effect is classified as instant:
+     * - instant_health: Heals the player immediately (no ongoing effect)
+     * - instant_damage: Damages the player immediately (no ongoing effect)
+     * - saturation: Restores hunger bars instantly (technically has duration but negligible)
+     * 
+     * @return Unmodifiable Set containing instant effect key strings
      */
     private static Set<String> createInstantEffectsSet() {
         Set<String> set = new HashSet<>();
@@ -147,7 +419,23 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Creates the potion name to effect key mapping
+     * Creates the immutable mapping of user-friendly potion names to internal effect keys.
+     * 
+     * This map serves multiple purposes:
+     * 1. Validates user input in /masterbrewing give potion commands
+     * 2. Translates user-friendly names to Minecraft's internal effect names
+     * 3. Provides the list of available potions for tab completion
+     * 
+     * Translation examples (user name → internal key):
+     * - "healing" → "instant_health" (Minecraft uses different internal name)
+     * - "leaping" → "jump_boost" (Minecraft uses different internal name)
+     * - "speed" → "speed" (same name, but still needed for validation)
+     * 
+     * Custom effects not in vanilla:
+     * - "fortune" → "fortune" (displays as Fortune, uses LUCK effect internally)
+     * - "fly" → "fly" (custom flight effect, no PotionEffectType equivalent)
+     * 
+     * @return Unmodifiable Map of potion names to effect keys
      */
     private static Map<String, String> createPotionNameMap() {
         Map<String, String> map = new HashMap<>();
@@ -192,30 +480,87 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Inner class to hold upgrade paths for a specific potion type
+     * Holds the complete upgrade path configuration for a specific potion type.
+     * 
+     * Each UpgradePath contains all the information needed to upgrade a potion:
+     * - timeUpgrades: Map of level -> [redstone cost, duration seconds]
+     * - powerUpgrades: Map of level -> glowstone cost
+     * - maxTimeLevel: Highest available time upgrade for this potion
+     * - maxPowerLevel: Highest available power upgrade for this potion
+     * 
+     * Usage:
+     * Potions can have custom upgrade paths defined in config.yml that differ
+     * from the global defaults. This allows balancing individual potions:
+     * - Fly potions might cost more redstone/glowstone
+     * - Speed potions might have more upgrade tiers
+     * - Healing potions might only support power upgrades (instant effect)
+     * 
+     * The upgrade maps use the same format as global maps, allowing seamless
+     * fallback to defaults when a potion doesn't have custom configuration.
      */
     private static class UpgradePath {
-        Map<Integer, int[]> timeUpgrades; // level -> [redstone cost, duration seconds]
-        Map<Integer, Integer> powerUpgrades; // level -> glowstone cost
+        /** Time (duration) upgrades: level -> [redstone cost, duration in seconds] */
+        Map<Integer, int[]> timeUpgrades;
+        
+        /** Power (amplifier) upgrades: level -> glowstone cost */
+        Map<Integer, Integer> powerUpgrades;
+        
+        /** Highest time upgrade level available in this path */
         int maxTimeLevel;
+        
+        /** Highest power upgrade level available in this path */
         int maxPowerLevel;
         
+        /**
+         * Constructs an UpgradePath and automatically calculates max levels.
+         * 
+         * @param timeUpgrades Map of time upgrade level -> [cost, duration]
+         * @param powerUpgrades Map of power upgrade level -> cost
+         */
         UpgradePath(Map<Integer, int[]> timeUpgrades, Map<Integer, Integer> powerUpgrades) {
             this.timeUpgrades = timeUpgrades;
             this.powerUpgrades = powerUpgrades;
+            // Calculate max levels by finding highest key in each map
             this.maxTimeLevel = timeUpgrades.isEmpty() ? 0 : Collections.max(timeUpgrades.keySet());
             this.maxPowerLevel = powerUpgrades.isEmpty() ? 0 : Collections.max(powerUpgrades.keySet());
         }
     }
     
     /**
-     * Inner class to track active master potion effects
+     * Represents a single active Master Potion effect on a player.
+     * 
+     * This class tracks all information needed to maintain an effect:
+     * - effectTypeKey: What effect is active (e.g., "speed", "fly", "fortune")
+     * - amplifier: How strong it is (0 = level I, 1 = level II, etc.)
+     * - expiryTime: When it expires (milliseconds since epoch, System.currentTimeMillis() format)
+     * 
+     * Used by the background refresh task to:
+     * - Determine if an effect has expired (currentTime >= expiryTime)
+     * - Calculate remaining duration for warnings and display
+     * - Reapply the vanilla effect with correct amplifier
+     * - Handle special effects like flight
+     * 
+     * Serialization format for disk storage (playerdata/*.yml):
+     * "effectTypeKey,amplifier,expiryTime" as a comma-separated string
+     * Example: "speed,3,1699459200000" = Speed IV expiring at that timestamp
      */
     private static class ActiveMasterEffect {
-        String effectTypeKey; // Effect type key (e.g. "speed", "strength", "fly")
-        int amplifier;
-        long expiryTime; // System time in milliseconds when effect expires
+        /** Effect identifier string (e.g., "speed", "fly", "fortune", "regeneration") */
+        String effectTypeKey;
         
+        /** Amplifier level (0-based: 0 = level I, 1 = level II, etc.) */
+        int amplifier;
+        
+        /** System time in milliseconds when this effect should expire */
+        long expiryTime;
+        
+        /**
+         * Constructs an ActiveMasterEffect with all required tracking data.
+         * 
+         * @param effectTypeKey The effect identifier (e.g., "speed", "fly")
+         * @param amplifier The amplifier level (0-based, 0 = level I)
+         * @param expiryTime Expiration timestamp (System.currentTimeMillis() format)
+         */
         ActiveMasterEffect(String effectTypeKey, int amplifier, long expiryTime) {
             this.effectTypeKey = effectTypeKey;
             this.amplifier = amplifier;
@@ -328,14 +673,8 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
      */
     @Override
     public void onDisable() {
-        // Save all active player effects to disk for persistence
-        // This prevents data loss if the server crashes or is force-killed
-        for (UUID uuid : activeMasterEffects.keySet()) {
-            List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
-            savePlayerEffects(uuid, effects);
-        }
-        
-        // Save any currently open virtual brewing stands
+        // Save any currently open virtual brewing stands FIRST
+        // This must happen before saving effects to prevent race conditions
         for (Map.Entry<UUID, org.bukkit.inventory.Inventory> entry : virtualBrewingStands.entrySet()) {
             UUID playerUUID = entry.getKey();
             org.bukkit.inventory.Inventory inv = entry.getValue();
@@ -350,6 +689,13 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
             
             int fuelLevel = virtualBrewingFuel.getOrDefault(playerUUID, 0);
             savePlayerBrewingData(playerUUID, contents, fuelLevel);
+        }
+        
+        // Save all active player effects to disk for persistence
+        // Use synchronous save during shutdown - async tasks may not complete
+        for (UUID uuid : activeMasterEffects.keySet()) {
+            List<ActiveMasterEffect> effects = activeMasterEffects.get(uuid);
+            savePlayerEffectsSync(uuid, effects);
         }
         
         getLogger().info("MasterBrewing plugin disabled!");
@@ -990,15 +1336,37 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Checks if a location has a Master Brewing Stand
-     * OPTIMIZATION #1: Now uses string-based lookup
+     * Checks if a location has a Master Brewing Stand.
+     * OPTIMIZATION #1: Uses block's PersistentDataContainer for O(1) lookup.
      */
     
-    // ==================== EVENT HANDLERS ====================
+    // ==================================================================================
+    // EVENT HANDLERS - Block placement, breaking, brewing, and potion consumption
+    // ==================================================================================
     
     /**
-     * Handles placing Master Brewing Stands
-     * OPTIMIZATION #1: Now stores location as string
+     * Handles placement of Master Brewing Stand items.
+     * 
+     * When a player places an item that is a Master Brewing Stand:
+     * 1. Verify the placed item has the master_brewing_stand NBT marker
+     * 2. Schedule a delayed task (1 tick) to allow block state initialization
+     * 3. Mark the placed BLOCK with our NBT marker (transfers from item to block)
+     * 4. Restore saved inventory contents if stand was previously broken with items
+     * 5. Restore saved fuel level
+     * 6. Send confirmation message to the player
+     * 
+     * Why the 1-tick delay?
+     * - Block state isn't fully initialized during BlockPlaceEvent
+     * - Attempting to modify it immediately may fail or be overwritten
+     * - Delayed task ensures block is ready for NBT operations
+     * 
+     * Inventory restoration process:
+     * - Check if item NBT contains serialized slot data (JSON strings)
+     * - Deserialize each slot using Gson
+     * - Set each item in the brewing stand's inventory
+     * - This preserves potions/ingredients when stand is picked up and replaced
+     * 
+     * @param event The block place event from Bukkit
      */
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onBlockPlace(BlockPlaceEvent event) {
@@ -1123,8 +1491,30 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles breaking Master Brewing Stands
-     * Prevents duplicate drops when using SpecialBooks auto-pickup tools
+     * Handles breaking of Master Brewing Stand blocks.
+     * 
+     * When a player breaks a block that is a Master Brewing Stand:
+     * 1. Check if the block has our master_brewing_stand NBT marker
+     * 2. Cancel the vanilla break event (prevents normal brewing stand drop)
+     * 3. Create a new Master Brewing Stand item with our NBT marker
+     * 4. Serialize and save all inventory contents to the item's NBT
+     * 5. Save the current fuel level to the item's NBT
+     * 6. Handle SpecialBooks auto-pickup compatibility
+     * 7. Drop the item or add to player's inventory
+     * 8. Remove the block
+     * 
+     * Why cancel the event?
+     * - Prevents vanilla from dropping a regular (non-master) brewing stand
+     * - Prevents SpecialBooks plugin from creating duplicate drops
+     * - Gives us full control over what item drops and its NBT data
+     * 
+     * SpecialBooks compatibility:
+     * - Checks if player's tool has the "auto_pickup" NBT from SpecialBooks
+     * - If present: Add item directly to inventory (same as SpecialBooks behavior)
+     * - If not present: Drop item naturally at block location
+     * - Overflow items drop at player location if inventory is full
+     * 
+     * @param event The block break event from Bukkit
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBlockBreak(BlockBreakEvent event) {
@@ -1230,7 +1620,25 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles brewing completion in Master Brewing Stands
+     * Handles brewing completion events in Master Brewing Stands.
+     * 
+     * This method intercepts vanilla brewing and applies our custom upgrade logic:
+     * 1. Check if the brewing stand block has our master_brewing_stand NBT marker
+     * 2. Check if the ingredient is redstone (time upgrade) or glowstone (power upgrade)
+     * 3. If neither, allow vanilla brewing to proceed normally
+     * 4. If upgrade ingredient: Cancel vanilla brewing to prevent unwanted results
+     * 5. Store current potion states before any modification
+     * 6. Schedule task to restore potions and apply our master brewing logic
+     * 
+     * Why cancel vanilla brewing for redstone/glowstone?
+     * - Vanilla has its own recipes: Redstone → Long potion, Glowstone → Strong potion
+     * - These would conflict with our upgrade system
+     * - Example: Redstone on Speed potion would make "Long Speed" not "Upgraded Speed"
+     * - Canceling lets us apply our custom tier-based upgrades instead
+     * 
+     * Event priority is LOWEST to run before other plugins that might modify brewing.
+     * 
+     * @param event The brew event from Bukkit
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBrew(BrewEvent event) {
@@ -1285,7 +1693,28 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Processes master brewing upgrades
+     * Processes master brewing upgrade logic for a brewing stand inventory.
+     * 
+     * This is the core upgrade method that handles the actual brewing:
+     * 1. Scan all 3 potion slots (0, 1, 2) for upgradeable potions
+     * 2. Calculate material cost based on the first valid potion's next upgrade tier
+     * 3. Verify sufficient materials are present in ingredient slot
+     * 4. Apply the upgrade to ALL valid potions in the stand
+     * 5. Consume the required materials from ingredient slot
+     * 
+     * Material cost determination:
+     * - Based on the NEXT level's config entry for the potion
+     * - Current level 0 upgrading to 1: uses level 1 cost from config
+     * - Current level 2 upgrading to 3: uses level 3 cost from config
+     * - Cost is taken from potion-specific config if defined, else global config
+     * 
+     * All potions share the same cost (uses first potion's cost for all).
+     * This matches vanilla brewing behavior where all 3 bottles are processed together.
+     * 
+     * @param inv The brewing stand inventory containing potions and ingredient
+     * @param ingredient The ingredient ItemStack (redstone or glowstone)
+     * @param isRedstone true if upgrading duration (time level)
+     * @param isGlowstone true if upgrading power (amplifier level)
      */
     private void processMasterBrew(BrewerInventory inv, ItemStack ingredient, boolean isRedstone, boolean isGlowstone) {
         // Get cost from first valid potion
@@ -1327,7 +1756,23 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Extracts the duration from a vanilla potion
+     * Extracts the base duration from a vanilla potion for initial upgrade calculations.
+     * 
+     * When a vanilla (non-master) potion is first upgraded, we need to know its
+     * starting duration. This method determines that duration by:
+     * 
+     * 1. First checking custom effects on the PotionMeta (most accurate)
+     * 2. Falling back to vanilla potion type name-based defaults
+     * 
+     * Vanilla duration conventions:
+     * - LONG_ variants (e.g., LONG_SWIFTNESS): 8 minutes (480 seconds)
+     * - STRONG_ variants (e.g., STRONG_SWIFTNESS): Usually 1.5-3 minutes
+     * - Regular variants: 3 minutes (180 seconds)
+     * - Instant effects (INSTANT_HEALTH, INSTANT_DAMAGE): 1 second (immediate)
+     * 
+     * @param meta The PotionMeta to extract duration from
+     * @param effectType The PotionEffectType to look for in custom effects
+     * @return Duration in seconds (defaults to 180 if unable to determine)
      */
     private int extractVanillaPotionDuration(PotionMeta meta, PotionEffectType effectType) {
         // Try to get duration from custom effects first
@@ -1362,7 +1807,31 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles right-clicking master potions for instant use
+     * Handles right-clicking Master Potions for instant activation.
+     * 
+     * Master potions activate INSTANTLY on right-click without requiring the
+     * vanilla drinking animation. This provides several benefits:
+     * - Better combat usability (no 1.6 second drink delay)
+     * - Consistent activation timing
+     * - Works for custom effects like "fly" that have no vanilla consume behavior
+     * 
+     * Process flow:
+     * 1. Verify action is RIGHT_CLICK_AIR or RIGHT_CLICK_BLOCK
+     * 2. Verify held item is a potion with master_potion NBT marker
+     * 3. Cancel the vanilla interaction event (prevents drink animation)
+     * 4. Read effect data from potion's NBT (type, power level, duration)
+     * 5. Calculate expiry time and add to activeMasterEffects tracking
+     * 6. Apply the effect immediately:
+     *    - For "fly": Enable flight via setAllowFlight/setFlying
+     *    - For "fortune": Apply LUCK effect with custom amplifier
+     *    - For vanilla effects: Apply via player.addPotionEffect()
+     * 7. Consume one potion from the stack
+     * 8. Play drink sound and show activation message
+     * 
+     * The effect is then maintained by the background refresh task which
+     * runs every 3 seconds to keep effects active beyond vanilla limits.
+     * 
+     * @param event The player interact event from Bukkit
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerInteract(PlayerInteractEvent event) {
@@ -1465,7 +1934,21 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Prevents vanilla from consuming master potions
+     * Prevents vanilla consumption of Master Potions.
+     * 
+     * This is a safety handler that catches any case where vanilla might try
+     * to consume a master potion through normal drinking mechanics:
+     * - Player holds right-click long enough to trigger vanilla consume
+     * - Another plugin triggers potion consumption
+     * - Edge cases not caught by onPlayerInteract
+     * 
+     * Master potions should ONLY activate through our instant-use handler
+     * (onPlayerInteract), not through vanilla's drinking system, because:
+     * - We need to track the effect in activeMasterEffects
+     * - Vanilla would apply wrong duration/amplifier
+     * - Custom effects like "fly" have no vanilla behavior
+     * 
+     * @param event The player item consume event from Bukkit
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerConsume(PlayerItemConsumeEvent event) {
@@ -1485,8 +1968,21 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Clean up tracked effects when player disconnects
-     * OPTIMIZATION #4: Now saves asynchronously
+     * Saves player's active Master Potion effects when they disconnect.
+     * 
+     * When a player logs out:
+     * 1. Get their active effects from the tracking map BEFORE removing
+     * 2. Save effects to disk (async) so they persist
+     * 3. Remove player from active tracking map to free memory
+     * 
+     * The effects will be restored when the player joins again via onPlayerJoin.
+     * 
+     * Note: Effects continue counting down while player is offline!
+     * The expiryTime is an absolute timestamp, so if a player logs out with
+     * 5 minutes remaining and returns 3 minutes later, they'll have 2 minutes left.
+     * If they return after 5+ minutes, the effect will have expired.
+     * 
+     * @param event The player quit event from Bukkit
      */
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
@@ -1503,7 +1999,23 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Restore tracked effects when player reconnects
+     * Restores player's active Master Potion effects when they reconnect.
+     * 
+     * When a player logs in:
+     * 1. Load their saved effects from playerdata/{uuid}.yml
+     * 2. Filter out any effects that expired while they were offline
+     * 3. Add remaining effects to the active tracking map
+     * 4. Schedule a task (1 tick delay) to restore effects after player loads:
+     *    - Flight: Re-enable setAllowFlight, setFlying, and correct flight speed
+     *    - Vanilla effects: Reapply via addPotionEffect with remaining duration
+     * 5. Show restoration message with remaining time
+     * 
+     * The 1-tick delay is necessary because:
+     * - Player object isn't fully initialized during PlayerJoinEvent
+     * - setFlying() may fail if called too early
+     * - Ensures player is fully loaded into the world first
+     * 
+     * @param event The player join event from Bukkit
      */
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
@@ -1563,29 +2075,75 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Saves a player's active master potion effects to their playerdata file
-     * OPTIMIZATION #4: Now runs asynchronously
+     * Saves a player's active Master Potion effects to their playerdata file.
+     * 
+     * File location: plugins/MasterBrewing/playerdata/{uuid}.yml
+     * 
+     * Serialization format:
+     * ```yaml
+     * active-effects:
+     *   - "speed,3,1699459200000"
+     *   - "fly,1,1699460100000"
+     * ```
+     * Each entry is: "effectTypeKey,amplifier,expiryTime" (comma-separated)
+     * 
+     * This method runs ASYNCHRONOUSLY to prevent blocking the main thread
+     * during disk I/O. File operations are slow and shouldn't delay gameplay.
+     * 
+     * If the effects list is null or empty, any existing file is deleted
+     * to clean up stale data.
+     * 
+     * @param uuid The player's UUID
+     * @param effects List of active effects to save (may be null or empty)
      */
     private void savePlayerEffects(UUID uuid, List<ActiveMasterEffect> effects) {
         // OPTIMIZATION #4: Run file I/O asynchronously
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
-            if (effects == null || effects.isEmpty()) {
-                // Delete file if no effects
-                File playerFile = new File(getDataFolder(), "playerdata/" + uuid.toString() + ".yml");
-                if (playerFile.exists()) {
-                    playerFile.delete();
-                }
-                return;
-            }
-            
             File playerDataFolder = new File(getDataFolder(), "playerdata");
             if (!playerDataFolder.exists()) {
                 playerDataFolder.mkdirs();
             }
             
             File playerFile = new File(playerDataFolder, uuid.toString() + ".yml");
-            org.bukkit.configuration.file.FileConfiguration config = 
-                org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(playerFile);
+            
+            // Load existing config to preserve brewing slot data
+            org.bukkit.configuration.file.YamlConfiguration config;
+            if (playerFile.exists()) {
+                config = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(playerFile);
+            } else {
+                config = new org.bukkit.configuration.file.YamlConfiguration();
+            }
+            
+            // Check if there's any brewing content to preserve
+            boolean hasBrewingContent = false;
+            for (int i = 0; i < 5; i++) {
+                if (config.contains("slot" + i)) {
+                    hasBrewingContent = true;
+                    break;
+                }
+            }
+            hasBrewingContent = hasBrewingContent || config.getInt("fuel", 0) > 0;
+            
+            if (effects == null || effects.isEmpty()) {
+                // Clear active-effects from config
+                config.set("active-effects", null);
+                
+                // Only delete file if there's also no brewing content
+                if (!hasBrewingContent) {
+                    if (playerFile.exists()) {
+                        playerFile.delete();
+                    }
+                    return;
+                }
+                
+                // Save the file with brewing content preserved (but no effects)
+                try {
+                    config.save(playerFile);
+                } catch (Exception e) {
+                    getLogger().warning("Failed to save player data for " + uuid + ": " + e.getMessage());
+                }
+                return;
+            }
             
             List<String> effectStrings = new ArrayList<>();
             for (ActiveMasterEffect effect : effects) {
@@ -1607,7 +2165,103 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Loads a player's active master potion effects from their playerdata file
+     * Saves a player's active Master Potion effects SYNCHRONOUSLY.
+     * 
+     * This is used during plugin disable (server shutdown) when async tasks
+     * may not complete reliably. Preserves any existing brewing stand data
+     * in the player's data file.
+     * 
+     * @param uuid The player's UUID
+     * @param effects List of active effects to save (may be null or empty)
+     */
+    private void savePlayerEffectsSync(UUID uuid, List<ActiveMasterEffect> effects) {
+        File playerDataFolder = new File(getDataFolder(), "playerdata");
+        if (!playerDataFolder.exists()) {
+            playerDataFolder.mkdirs();
+        }
+        
+        File playerFile = new File(playerDataFolder, uuid.toString() + ".yml");
+        
+        // Load existing config to preserve brewing slot data
+        org.bukkit.configuration.file.YamlConfiguration config;
+        if (playerFile.exists()) {
+            config = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(playerFile);
+        } else {
+            config = new org.bukkit.configuration.file.YamlConfiguration();
+        }
+        
+        // Check if there's any brewing content to preserve
+        boolean hasBrewingContent = false;
+        for (int i = 0; i < 5; i++) {
+            if (config.contains("slot" + i)) {
+                hasBrewingContent = true;
+                break;
+            }
+        }
+        hasBrewingContent = hasBrewingContent || config.getInt("fuel", 0) > 0;
+        
+        if (effects == null || effects.isEmpty()) {
+            // Clear active-effects from config
+            config.set("active-effects", null);
+            
+            // Only delete file if there's also no brewing content
+            if (!hasBrewingContent) {
+                if (playerFile.exists()) {
+                    playerFile.delete();
+                }
+                return;
+            }
+            
+            // Save the file with brewing content preserved (but no effects)
+            try {
+                config.save(playerFile);
+            } catch (Exception e) {
+                getLogger().warning("Failed to save player data for " + uuid + ": " + e.getMessage());
+            }
+            return;
+        }
+        
+        List<String> effectStrings = new ArrayList<>();
+        for (ActiveMasterEffect effect : effects) {
+            // Format: effectTypeKey,amplifier,expiryTime
+            String effectString = effect.effectTypeKey + "," + 
+                                 effect.amplifier + "," + 
+                                 effect.expiryTime;
+            effectStrings.add(effectString);
+        }
+        
+        config.set("active-effects", effectStrings);
+        
+        try {
+            config.save(playerFile);
+        } catch (Exception e) {
+            getLogger().warning("Failed to save player effects for " + uuid + ": " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Loads a player's active Master Potion effects from their playerdata file.
+     * 
+     * File location: plugins/MasterBrewing/playerdata/{uuid}.yml
+     * 
+     * Process:
+     * 1. Check if playerdata file exists for this UUID
+     * 2. Read the "active-effects" list from YAML
+     * 3. Parse each effect string: "effectTypeKey,amplifier,expiryTime"
+     * 4. Skip any effects that have already expired (expiryTime <= currentTime)
+     * 5. Validate that effect types are real (except custom fly/fortune)
+     * 6. Add valid effects to the activeMasterEffects tracking map
+     * 
+     * Error handling:
+     * - Missing file: Silently returns (player has no saved effects)
+     * - Invalid format: Logs warning and skips that entry
+     * - Unknown effect type: Logs warning and skips that entry
+     * - Expired effects: Silently skipped (normal behavior)
+     * 
+     * Note: This runs synchronously on the main thread during player join.
+     * File reads are fast enough that async isn't needed here.
+     * 
+     * @param uuid The player's UUID to load effects for
      */
     private void loadPlayerEffects(UUID uuid) {
         File playerFile = new File(getDataFolder(), "playerdata/" + uuid.toString() + ".yml");
@@ -1667,19 +2321,32 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Saves virtual brewing stand contents for all players to disk
-     * Called asynchronously during normal operation
-     */
-    /**
-     * Saves a player's virtual brewing stand data to their individual file
+     * Saves a player's virtual brewing stand contents to their playerdata file.
      * 
-     * IMPORTANT: This method must preserve existing active-effects data in the file.
+     * IMPORTANT: This method must preserve existing "active-effects" data in the file!
      * The playerdata file contains BOTH brewing stand data AND active potion effects.
-     * We must load the existing config first to avoid overwriting effect data.
+     * We load the existing config first to avoid overwriting effect data.
+     * 
+     * File structure (plugins/MasterBrewing/playerdata/{uuid}.yml):
+     * ```yaml
+     * active-effects:       # Preserved from existing file
+     *   - "speed,3,1699459200000"
+     * slot0: "base64..."    # Left potion bottle (Base64 ItemStack)
+     * slot1: "base64..."    # Middle potion bottle
+     * slot2: "base64..."    # Right potion bottle
+     * slot3: "base64..."    # Ingredient slot
+     * slot4: "base64..."    # Fuel slot (blaze powder)
+     * fuel: 15              # Remaining fuel charges (0-20)
+     * ```
+     * 
+     * ItemStacks are serialized using Bukkit's BukkitObjectOutputStream to Base64.
+     * This preserves all NBT data including our custom master potion tags.
+     * 
+     * If no brewing content exists AND no active effects exist, the file is deleted.
      * 
      * @param playerUUID The player's UUID
-     * @param contents The inventory contents (5 slots)
-     * @param fuelLevel The current fuel level (0-20)
+     * @param contents Array of 5 ItemStacks (slots 0-4, may contain nulls)
+     * @param fuelLevel Current fuel level (0-20)
      */
     private void savePlayerBrewingData(UUID playerUUID, ItemStack[] contents, int fuelLevel) {
         File playerFile = new File(getDataFolder(), "playerdata/" + playerUUID.toString() + ".yml");
@@ -1741,11 +2408,14 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Loads a player's virtual brewing stand data from their individual file
+     * Loads a player's virtual brewing stand contents from their playerdata file.
+     * 
+     * Reads Base64-encoded ItemStacks from the YAML file and deserializes them.
+     * Called when a player opens their virtual brewing stand via /masterbrewing.
      * 
      * @param playerUUID The player's UUID
-     * @return A two-element array: [0] = ItemStack[] contents, [1] = Integer fuel level
-     *         Returns null contents and 0 fuel if no data exists
+     * @return Two-element Object array: [0] = ItemStack[5] contents, [1] = Integer fuel level
+     *         Contents array may contain nulls for empty slots. Fuel defaults to 0.
      */
     private Object[] loadPlayerBrewingData(UUID playerUUID) {
         File playerFile = new File(getDataFolder(), "playerdata/" + playerUUID.toString() + ".yml");
@@ -1780,7 +2450,16 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Serializes an ItemStack to a Base64 string
+     * Serializes an ItemStack to a Base64-encoded string for storage.
+     * 
+     * Uses Bukkit's BukkitObjectOutputStream which preserves:
+     * - Material type and amount
+     * - All NBT data (including our custom master potion/brewing stand tags)
+     * - Enchantments, display name, lore
+     * - Damage/durability values
+     * 
+     * @param item The ItemStack to serialize
+     * @return Base64 string representation, or null if serialization fails
      */
     private String itemStackToBase64(ItemStack item) {
         try {
@@ -1796,7 +2475,16 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Deserializes an ItemStack from a Base64 string
+     * Deserializes an ItemStack from a Base64-encoded string.
+     * 
+     * Reverses the itemStackToBase64() serialization, fully restoring:
+     * - Material type and amount
+     * - All NBT data (master potion tags, brewing stand tags, etc.)
+     * - Enchantments, display name, lore
+     * - Damage/durability values
+     * 
+     * @param base64 The Base64 string to deserialize
+     * @return Restored ItemStack, or null if deserialization fails
      */
     private ItemStack itemStackFromBase64(String base64) {
         try {
@@ -1811,16 +2499,39 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         }
     }
     
-    // ==================== HELPER METHODS ====================
+    // ==================================================================================
+    // HELPER METHODS - Core upgrade logic, display formatting, and utilities
+    // ==================================================================================
     
     /**
-     * Upgrades a master potion with the given ingredient
-     * This is the SINGLE code path for all potion upgrades - real and virtual brewing stands
+     * Upgrades a Master Potion with the given ingredient type.
      * 
-     * @param potion The potion to upgrade
-     * @param isRedstone True if upgrading with redstone (duration)
-     * @param isGlowstone True if upgrading with glowstone (power)
-     * @return The material cost consumed, or -1 if upgrade failed
+     * This is the SINGLE code path for ALL potion upgrades - both physical brewing
+     * stands and virtual (command-based) brewing stands use this method.
+     * 
+     * Process:
+     * 1. Validate potion is not null and is actually a potion item
+     * 2. Read current upgrade levels from potion NBT
+     * 3. Get the effect type from NBT (or detect from vanilla potion)
+     * 4. Look up the next upgrade tier in config (potion-specific or global)
+     * 5. Calculate new levels and duration
+     * 6. Update all NBT tags on the potion
+     * 7. Update visual display (name, lore, color, custom effects)
+     * 
+     * Redstone upgrades (isRedstone=true):
+     * - Increases time level by 1
+     * - Sets duration to the new tier's configured duration
+     * - Cannot upgrade instant effects (returns -1)
+     * 
+     * Glowstone upgrades (isGlowstone=true):
+     * - Increases power level by 1
+     * - Keeps existing duration unchanged
+     * - Amplifier shown as Roman numeral in name (I, II, III, etc.)
+     * 
+     * @param potion The potion ItemStack to upgrade (modified in place)
+     * @param isRedstone true if upgrading with redstone (duration)
+     * @param isGlowstone true if upgrading with glowstone (power)
+     * @return Material cost consumed, or -1 if upgrade failed/not possible
      */
     private int upgradeMasterPotion(ItemStack potion, boolean isRedstone, boolean isGlowstone) {
         if (potion == null || !isPotion(potion)) {
@@ -1932,12 +2643,24 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Gets the material cost for the next upgrade without applying it
+     * Gets the material cost for the next upgrade without actually applying it.
+     * 
+     * This is a read-only method used to:
+     * - Determine if a potion CAN be upgraded (returns -1 if not)
+     * - Calculate how much material will be consumed
+     * - Check before committing to the upgrade
+     * 
+     * Returns -1 (cannot upgrade) when:
+     * - Item is null or not a potion
+     * - Potion has no valid effect type
+     * - Already at max level for the upgrade type
+     * - Trying to upgrade instant effect with redstone
+     * - Config doesn't have an entry for the next level
      * 
      * @param potion The potion to check
-     * @param isRedstone True if checking redstone upgrade
-     * @param isGlowstone True if checking glowstone upgrade
-     * @return The material cost, or -1 if upgrade not possible
+     * @param isRedstone true if checking redstone (time) upgrade cost
+     * @param isGlowstone true if checking glowstone (power) upgrade cost
+     * @return Material cost for next upgrade, or -1 if upgrade not possible
      */
     private int getUpgradeCost(ItemStack potion, boolean isRedstone, boolean isGlowstone) {
         if (potion == null || !isPotion(potion)) {
@@ -1985,15 +2708,33 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Updates a master potion's display name, lore, color, and effects
-     * This is the single source of truth for how master potions are displayed
+     * Updates a Master Potion's visual display: name, lore, color, and custom effects.
      * 
-     * @param meta The potion meta to update
-     * @param effectTypeKey The effect identifier (e.g., "speed", "fly", "fortune")
-     * @param effectType The PotionEffectType (null for fly)
-     * @param newTimeLevel The current time upgrade level
-     * @param newPowerLevel The current power upgrade level
-     * @param duration The duration in seconds
+     * This is the SINGLE source of truth for how Master Potions appear to players.
+     * Called after any upgrade to ensure consistent display formatting.
+     * 
+     * Display format:
+     * - Name: "{EffectName} {RomanLevel}" in gold italic (e.g., "Speed IV")
+     * - Color: Effect-specific color matching vanilla potion colors
+     * - Lore lines:
+     *   1. "Master Potion" in light purple (identifier)
+     *   2. Effect-specific stat (power level, flight speed %, etc.)
+     *   3. Duration with max shown (e.g., "Duration: 10m 0s (Max: 1h 0m 0s)")
+     *   4. Next power upgrade cost if not at max
+     *   5. Next duration upgrade cost if not at max
+     * 
+     * Special handling:
+     * - Fly potions: Show "Flight Speed: X%" instead of generic power
+     * - Fortune potions: Show "Luck: +X" instead of generic power
+     * - Instant effects: Show "Duration: Instant" with no time upgrade line
+     * - Max level indicators: Show "(MAX)" instead of upgrade cost
+     * 
+     * @param meta The PotionMeta to update (modified in place)
+     * @param effectTypeKey Effect identifier (e.g., "speed", "fly", "fortune")
+     * @param effectType PotionEffectType (null for custom effects like fly)
+     * @param newTimeLevel Current time upgrade level
+     * @param newPowerLevel Current power upgrade level
+     * @param duration Current duration in seconds
      */
     private void updateMasterPotionDisplay(PotionMeta meta, String effectTypeKey, PotionEffectType effectType, 
                                            int newTimeLevel, int newPowerLevel, int duration) {
@@ -2184,7 +2925,10 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Checks if an item is a potion
+     * Checks if an ItemStack is any type of potion (drinkable, splash, or lingering).
+     * 
+     * @param item The ItemStack to check
+     * @return true if item is POTION, SPLASH_POTION, or LINGERING_POTION
      */
     private boolean isPotion(ItemStack item) {
         Material type = item.getType();
@@ -2192,7 +2936,26 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Gets the base potion effect from a potion item
+     * Gets the primary PotionEffectType from a potion ItemStack.
+     * 
+     * Resolution order:
+     * 1. Check NBT for stored effect type (already a master potion)
+     * 2. Check base potion type (vanilla potion like SWIFTNESS, STRENGTH)
+     * 3. Check custom effects list (for potions like luck, bad omen)
+     * 
+     * Handles name translations:
+     * - "leaping" → "jump_boost"
+     * - "swiftness" → "speed"
+     * - "healing" → "instant_health"
+     * - "harming" → "instant_damage"
+     * 
+     * Returns null for:
+     * - Water bottles (no effect)
+     * - Fly potions (custom effect, no PotionEffectType)
+     * - Invalid/unknown potions
+     * 
+     * @param potion The potion ItemStack to examine
+     * @return PotionEffectType of the potion, or null if none/unknown
      */
     private PotionEffectType getBasePotionEffect(ItemStack potion) {
         if (!(potion.getItemMeta() instanceof PotionMeta)) {
@@ -2246,7 +3009,16 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Formats effect name for display
+     * Formats a PotionEffectType key into a human-readable display name.
+     * 
+     * Converts snake_case to Title Case:
+     * - "speed" → "Speed"
+     * - "instant_health" → "Instant Health"
+     * - "fire_resistance" → "Fire Resistance"
+     * - "jump_boost" → "Jump Boost"
+     * 
+     * @param effectType The PotionEffectType to format
+     * @return Human-readable effect name with proper capitalization
      */
     private String formatEffectName(PotionEffectType effectType) {
         String key = effectType.getKey().getKey();
@@ -2266,7 +3038,21 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Converts integer to Roman numeral
+     * Converts an integer to Roman numeral representation.
+     * 
+     * Used for displaying potion levels in the traditional Minecraft style:
+     * - 1 → "I"
+     * - 2 → "II"
+     * - 4 → "IV"
+     * - 9 → "IX"
+     * - 10 → "X"
+     * - 50 → "L"
+     * - 100 → "C"
+     * 
+     * Supports numbers from 1 to 3999. Returns "I" for invalid input (≤0).
+     * 
+     * @param number The integer to convert (should be positive)
+     * @return Roman numeral string representation
      */
     private String toRoman(int number) {
         if (number <= 0) return "I";
@@ -2283,8 +3069,23 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Gets the correct potion color for a given effect type
-     * Colors from vanilla Minecraft 1.21+ (OptiFine color.properties)
+     * Gets the correct potion liquid color for a given effect type.
+     * 
+     * Colors are based on vanilla Minecraft 1.21+ potion colors.
+     * These colors are displayed in:
+     * - The potion bottle item appearance
+     * - Splash particles when thrown
+     * - The potion swirl particles around the player
+     * 
+     * Examples:
+     * - Speed: Cyan (#33ebff)
+     * - Strength: Red (#cc243c)
+     * - Regeneration: Pink (#f89fba)
+     * - Night Vision: Blue (#3066e6)
+     * - Fire Resistance: Orange (#ffa733)
+     * 
+     * @param effectType The PotionEffectType to get color for
+     * @return Bukkit Color matching vanilla's potion color, GRAY as fallback
      */
     private org.bukkit.Color getPotionColor(PotionEffectType effectType) {
         String key = effectType.getKey().getKey();
@@ -2362,7 +3163,19 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Formats duration in seconds to human-readable string
+     * Formats a duration in seconds to a human-readable time string.
+     * 
+     * Format examples:
+     * - 30 seconds → "30s"
+     * - 90 seconds → "1m 30s"
+     * - 3600 seconds → "1h 0m 0s"
+     * - 3661 seconds → "1h 1m 1s"
+     * 
+     * Hours are only shown if duration ≥ 1 hour.
+     * Minutes are only shown if duration ≥ 1 minute.
+     * 
+     * @param seconds Duration in seconds
+     * @return Formatted string like "5m 30s" or "1h 30m 0s"
      */
     private String formatDuration(int seconds) {
         int hours = seconds / 3600;
@@ -2378,8 +3191,25 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         }
     }
     
-    // ==================== COMMANDS ====================
+    // ==================================================================================
+    // COMMANDS - /masterbrewing command handling
+    // ==================================================================================
     
+    /**
+     * Main command handler for /masterbrewing commands.
+     * 
+     * Dispatches to sub-handlers based on first argument:
+     * - No args: Opens virtual brewing stand (if player has masterbrewing.use)
+     * - "help": Shows help menu with upgrade tier tables
+     * - "give": Gives master brewing items (requires masterbrewing.give)
+     * - "reload": Reloads config (requires masterbrewing.admin)
+     * 
+     * @param sender Command sender (player or console)
+     * @param command The command object
+     * @param label The alias used
+     * @param args Command arguments
+     * @return true if command was handled
+     */
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) {
@@ -2416,7 +3246,16 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Sends styled help message
+     * Sends a formatted help message showing all available commands and upgrade tables.
+     * 
+     * Help includes:
+     * - List of available commands based on sender's permissions
+     * - Time upgrade table (Level, Redstone Cost, Duration)
+     * - Power upgrade table (Level, Glowstone Cost, Potion Level)
+     * 
+     * Tables use Unicode box-drawing characters for clean formatting.
+     * 
+     * @param sender The command sender to show help to
      */
     private void sendHelp(CommandSender sender) {
         sender.sendMessage(Component.text("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", NamedTextColor.GOLD));
@@ -2501,7 +3340,19 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles /masterbrewing give command
+     * Handles /masterbrewing give sub-commands.
+     * 
+     * Dispatches to specific handlers:
+     * - "give stand <player>": Gives Master Brewing Stand item
+     * - "give potion <player> <type> [time] [power]": Gives Master Potion
+     * - "give potion <player> random": Gives random potion with random levels
+     * - "give potion <player> <type> max": Gives max-level potion
+     * 
+     * Requires masterbrewing.give permission.
+     * 
+     * @param sender Command sender
+     * @param args Full command arguments including "give"
+     * @return true if command was handled
      */
     private boolean handleGive(CommandSender sender, String[] args) {
         if (!sender.hasPermission("masterbrewing.give")) {
@@ -2531,7 +3382,14 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles /masterbrewing give stand command
+     * Handles /masterbrewing give stand <player> command.
+     * 
+     * Creates and gives a Master Brewing Stand item to the target player.
+     * The item has the master_brewing_stand NBT marker and custom lore.
+     * 
+     * @param sender Command sender
+     * @param args Full command arguments
+     * @return true if command was handled
      */
     private boolean handleGiveStand(CommandSender sender, String[] args) {
         if (args.length < 3) {
@@ -2555,8 +3413,22 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles /masterbrewing give potion command
-     * OPTIMIZATION #3: Now uses map lookup instead of switch statement
+     * Handles /masterbrewing give potion <player> <type> [time] [power] command.
+     * 
+     * Creates and gives a Master Potion to the target player with specified parameters.
+     * 
+     * Argument formats:
+     * - give potion <player> <type>              → Default levels (1,1 or 0,0 for fly/fortune)
+     * - give potion <player> <type> <level>      → Same level for both time and power
+     * - give potion <player> <type> <time> <pow> → Specific time and power levels
+     * - give potion <player> <type> max          → Maximum available levels
+     * - give potion <player> random              → Random type with random levels
+     * 
+     * Uses POTION_NAME_TO_EFFECT_KEY map for O(1) potion name validation and lookup.
+     * 
+     * @param sender Command sender
+     * @param args Full command arguments
+     * @return true if command was handled
      */
     private boolean handleGivePotion(CommandSender sender, String[] args) {
         if (args.length < 4) {
@@ -2918,8 +3790,19 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles /masterbrewing give potion <player> random command
-     * OPTIMIZATION #3: Now uses map lookup instead of switch statement
+     * Handles /masterbrewing give potion <player> random command.
+     * 
+     * Creates a potion with:
+     * - Random effect type from POTION_NAME_TO_EFFECT_KEY keyset
+     * - Random time level from 1 to maxTimeLevel (potion-specific max)
+     * - Random power level from 1 to maxPowerLevel (potion-specific max)
+     * 
+     * Useful for loot crates, random rewards, or testing.
+     * Uses per-potion max levels so each type stays within its valid range.
+     * 
+     * @param sender Command sender
+     * @param target Player to receive the potion
+     * @return true if command was handled
      */
     private boolean handleGiveRandomPotion(CommandSender sender, Player target) {
         // Get random potion name from all available potions
@@ -3180,7 +4063,20 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles /masterbrewing reload command
+     * Handles /masterbrewing reload command.
+     * 
+     * Reloads configuration from config.yml without server restart:
+     * - Clears existing upgrade tier maps
+     * - Re-parses config.yml
+     * - Rebuilds global and per-potion upgrade paths
+     * - Recalculates max levels
+     * 
+     * Requires masterbrewing.admin permission.
+     * Changes take effect immediately for new brewing operations.
+     * Does NOT affect currently active potion effects on players.
+     * 
+     * @param sender Command sender
+     * @return true if command was handled
      */
     private boolean handleReload(CommandSender sender) {
         if (!sender.hasPermission("masterbrewing.admin")) {
@@ -3197,9 +4093,24 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Opens a virtual Master Brewing Stand inventory for a player
-     * This allows players to use the /masterbrewing command to access a brewing GUI
-     * Note: Virtual brewing stands support the same upgrade mechanics as placed stands
+     * Opens a virtual Master Brewing Stand GUI for a player.
+     * 
+     * Virtual brewing stands provide the same functionality as physical stands
+     * without requiring a block to be placed. Useful for:
+     * - Players in areas where they can't place blocks
+     * - Convenience brewing while traveling
+     * - Testing and admin purposes
+     * 
+     * Process:
+     * 1. Create a brewing inventory with custom title
+     * 2. Load any saved contents from player's data file
+     * 3. Load saved fuel level
+     * 4. Track this inventory in virtualBrewingStands map
+     * 5. Open the GUI for the player
+     * 6. Update fuel display after 1 tick
+     * 
+     * Contents persist across sessions - items placed in virtual stand
+     * are saved to disk when closed and restored when opened again.
      * 
      * @param player The player to open the virtual brewing stand for
      */
@@ -3238,9 +4149,17 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Updates the fuel level display in the brewing stand GUI
+     * Updates the fuel level display in a virtual brewing stand GUI.
      * 
-     * @param player The player viewing the brewing stand
+     * Uses Bukkit's InventoryView.Property.FUEL_TIME to show the fuel bar.
+     * Value ranges from 0 (empty) to 20 (full from one blaze powder).
+     * 
+     * Called:
+     * - After opening virtual brewing stand
+     * - After each click event that might consume fuel
+     * - After drag events
+     * 
+     * @param player The player viewing the virtual brewing stand
      */
     private void updateFuelDisplay(Player player) {
         if (player.getOpenInventory() == null) return;
@@ -3254,7 +4173,21 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles inventory close events to save and clean up virtual brewing stands
+     * Handles inventory close events to save and clean up virtual brewing stands.
+     * 
+     * When a player closes their virtual brewing stand GUI:
+     * 1. Verify it's actually a virtual brewing stand (in our tracking map)
+     * 2. Save all inventory contents to player's data file
+     * 3. Save current fuel level
+     * 4. Remove from virtualBrewingStands tracking map
+     * 5. Remove from virtualBrewingFuel tracking map
+     * 
+     * This ensures:
+     * - Players don't lose items when closing the GUI
+     * - Fuel level persists between sessions
+     * - Memory is freed when stand is no longer in use
+     * 
+     * @param event The inventory close event from Bukkit
      */
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
@@ -3298,8 +4231,22 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles inventory click events for virtual brewing stands
-     * Processes brewing when items are placed in valid configuration
+     * Handles inventory click events for virtual brewing stands.
+     * 
+     * This method processes brewing when items are placed in valid configuration:
+     * 1. Verify click is in a virtual brewing stand (in our tracking map)
+     * 2. Schedule a delayed task (2 ticks) to let the click complete
+     * 3. Call processVirtualBrewing to check for and apply upgrades
+     * 4. Update fuel display
+     * 
+     * The 2-tick delay is necessary because:
+     * - Item isn't actually in the slot until after event completes
+     * - We need to see the inventory in its post-click state
+     * - Checking immediately would see pre-click state
+     * 
+     * Event priority is MONITOR to run after other plugins handle the click.
+     * 
+     * @param event The inventory click event from Bukkit
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onVirtualBrewingClick(InventoryClickEvent event) {
@@ -3338,7 +4285,12 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Handles inventory drag events for virtual brewing stands
+     * Handles inventory drag events for virtual brewing stands.
+     * 
+     * Drag events occur when player drags items across multiple slots.
+     * Same logic as click handler - delay processing to see final state.
+     * 
+     * @param event The inventory drag event from Bukkit
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onVirtualBrewingDrag(org.bukkit.event.inventory.InventoryDragEvent event) {
@@ -3368,10 +4320,31 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
     }
     
     /**
-     * Processes brewing in a virtual Master Brewing Stand
-     * Checks if valid ingredients and potions are present, then performs the upgrade
+     * Processes brewing upgrades in a virtual Master Brewing Stand.
+     * 
+     * This method loops continuously attempting upgrades until no more are possible.
+     * This allows batch processing when multiple upgrades worth of materials are present.
+     * 
+     * For each upgrade iteration:
+     * 1. Check ingredient slot (3) for redstone or glowstone
+     * 2. Check fuel slot (4) for blaze powder if fuel is empty
+     * 3. Find all potions (slots 0-2) that can be upgraded
+     * 4. Calculate material cost from first valid potion
+     * 5. Verify enough materials present
+     * 6. Consume fuel (1 charge per upgrade, blaze powder = 20 charges)
+     * 7. Consume ingredient materials
+     * 8. Apply upgrade to all valid potions
+     * 9. Repeat until out of materials, fuel, or max level reached
+     * 
+     * Brewing slot layout:
+     * - Slot 0: Left potion bottle
+     * - Slot 1: Middle potion bottle
+     * - Slot 2: Right potion bottle
+     * - Slot 3: Ingredient (redstone/glowstone)
+     * - Slot 4: Fuel (blaze powder)
      * 
      * @param inv The virtual brewing stand inventory
+     * @param playerUUID UUID of the player using the stand (for fuel tracking)
      */
     private void processVirtualBrewing(org.bukkit.inventory.Inventory inv, UUID playerUUID) {
         int totalUpgrades = 0;
@@ -3455,8 +4428,37 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         }
     }
     
-    // ==================== TAB COMPLETION ====================
+    // ==================================================================================
+    // TAB COMPLETION - Provides command argument suggestions
+    // ==================================================================================
     
+    /**
+     * Provides tab completion suggestions for /masterbrewing commands.
+     * 
+     * Completion tree:
+     * /masterbrewing
+     * ├── help
+     * ├── give (requires masterbrewing.give)
+     * │   ├── stand
+     * │   │   └── <online player names>
+     * │   └── potion
+     * │       └── <online player names>
+     * │           ├── random
+     * │           └── <potion types from POTION_NAME_TO_EFFECT_KEY>
+     * │               ├── max
+     * │               └── <1 to maxTimeLevel>
+     * │                   └── <1 to maxPowerLevel>
+     * └── reload (requires masterbrewing.admin)
+     * 
+     * Suggestions are filtered to only show options starting with current input.
+     * Permission checks ensure players only see commands they can use.
+     * 
+     * @param sender Command sender
+     * @param command Command being completed
+     * @param alias Alias used
+     * @param args Arguments typed so far
+     * @return List of completion suggestions
+     */
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> completions = new ArrayList<>();

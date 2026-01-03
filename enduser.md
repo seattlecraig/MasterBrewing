@@ -1,270 +1,177 @@
-# MasterBrewing - End User Guide
+# MasterBrewing End User Guide
 
-Welcome to MasterBrewing! This guide will teach you everything you need to know about creating and using incredibly powerful Master Potions.
-
-## Table of Contents
-- [What is MasterBrewing?](#what-is-masterbrewing)
-- [Getting Started](#getting-started)
-- [How to Upgrade Potions](#how-to-upgrade-potions)
-- [Understanding Potion Levels](#understanding-potion-levels)
-- [Using Master Potions](#using-master-potions)
-- [Special Potion Types](#special-potion-types)
-- [Tips and Tricks](#tips-and-tricks)
+Welcome to MasterBrewing! This guide will help you understand how to use Master Brewing Stands and Master Potions to create powerful potions that go far beyond vanilla Minecraft's limits.
 
 ## What is MasterBrewing?
 
-MasterBrewing allows you to upgrade potions far beyond vanilla Minecraft's limitations! With Master Brewing Stands, you can:
+MasterBrewing is a plugin that introduces enhanced potion brewing. Unlike vanilla Minecraft where potions have fixed durations and strength levels, Master Potions can be upgraded to have much longer durations and more powerful effects.
 
-- **Increase potion duration** by brewing with redstone (up to 30 minutes or more)
-- **Increase potion power** by brewing with glowstone (up to 6 levels or more)
-- **Use special potions** like Fly and Fortune
-- **Instant activation** - no waiting for drinking animation!
+## Master Brewing Stands
 
-## Getting Started
+A Master Brewing Stand looks like a regular brewing stand but has special properties. You can identify one by its gold name and special lore text when you hover over it in your inventory.
 
-### Obtaining a Master Brewing Stand
+### How to Get a Master Brewing Stand
 
-Master Brewing Stands are purchased using in-game currency via the /shop command. Once you have one:
+You can obtain a Master Brewing Stand in two ways:
+- An admin can give you one using a command
+- Open a virtual Master Brewing Stand by typing `/masterbrewing` (if you have permission)
 
-1. **Place it** like a normal brewing stand
-2. **Add fuel** (blaze powder) just like vanilla brewing
-3. **Start brewing** - it works just like a normal stand, but better!
+### Placing and Breaking Master Brewing Stands
 
-### Your First Master Potion
+When you place a Master Brewing Stand, it remembers its contents. If you break it, all items inside (potions, ingredients, fuel) are saved to the item. When you place it again, everything is restored exactly as you left it.
 
-1. Brew a **normal potion** in your Master Brewing Stand (e.g., Speed potion using sugar)
-2. Once brewed, you now have a potion ready to upgrade!
-3. The Master Brewing Stand preserves your potions when broken, including all contents and fuel
+## How to Brew Master Potions
 
-## How to Upgrade Potions
+Master Brewing uses the same interface as regular brewing, but the ingredients work differently:
 
-### Upgrading Duration (Time Level)
+### Step 1: Start with a Base Potion
+Place any vanilla potion that has an effect into one of the three potion slots. The potion must already have an effect (like Speed, Strength, Regeneration, etc.). Water bottles and Awkward Potions won't work.
 
-**Use Redstone Dust** to increase how long your potion lasts:
+### Step 2: Add Fuel
+Just like regular brewing, you need Blaze Powder for fuel. Place Blaze Powder in the fuel slot (bottom left). One Blaze Powder provides 20 brewing charges.
 
-1. Place your potion in the Master Brewing Stand
-2. Add **redstone dust** to the ingredient slot
-3. Wait for brewing to complete
-4. Your potion now lasts longer!
+### Step 3: Choose Your Upgrade
 
-**Important**: Each upgrade level requires more redstone. Check your potion's lore to see the cost for the next upgrade.
+You have two upgrade paths:
 
-### Upgrading Power (Power Level)
+**Duration Upgrade (Redstone Dust)**
+- Add Redstone Dust to the ingredient slot (top center)
+- This increases how long the potion effect lasts
+- The higher the upgrade level, the more Redstone Dust required
+- Each upgrade tier grants a specific duration
 
-**Use Glowstone Dust** to increase your potion's strength:
+**Power Upgrade (Glowstone Dust)**
+- Add Glowstone Dust to the ingredient slot (top center)
+- This increases the strength/amplifier of the effect
+- Speed II becomes Speed III, then Speed IV, and so on
+- The higher the upgrade level, the more Glowstone Dust required
 
-1. Place your potion in the Master Brewing Stand
-2. Add **glowstone dust** to the ingredient slot
-3. Wait for brewing to complete
-4. Your potion is now more powerful!
+### Step 4: Brewing Happens Instantly
+Unlike vanilla brewing which takes time, Master Brewing processes upgrades instantly when you have the right materials.
 
-**Important**: Each upgrade level requires more glowstone. Check your potion's lore to see the cost for the next upgrade.
+## Understanding Master Potions
 
-### Upgrade Costs
+Once a potion has been upgraded, it becomes a Master Potion with special properties:
 
-The amount of materials needed increases with each level:
-- **Level 1**: Usually 1 redstone/glowstone
-- **Level 2**: Usually 4 redstone/glowstone  
-- **Level 3**: Usually 16 redstone/glowstone
-- **Higher levels**: Can require up to 64 glowstone/redstone for the upgrade
+### Visual Identification
+- The potion name appears in gold italic text
+- The name shows the effect and Roman numeral level (e.g., "Speed IV")
+- The lore shows "Master Potion" in light purple
+- Additional lore lines show current stats and upgrade costs
 
-*Note: Different potion types may have different upgrade costs. Always check the potion's lore!*
+### Reading the Lore
+When you hover over a Master Potion, you'll see:
+- **Master Potion** - Identifies it as a Master Potion
+- **Power Level** - Shows current level and maximum possible
+- **Duration** - Shows current duration and maximum possible
+- **Upgrade Costs** - Shows what materials are needed for the next upgrade (if not at max)
 
-## Understanding Potion Levels
-
-### Time Level
-- Determines how long the potion effect lasts
-- Level 0 = Base duration (usually 3 minutes)
-- Higher levels = Longer duration (can reach hours!)
-- Shown in yellow text on the potion lore
-
-### Power Level
-- Determines the strength of the effect
-- Level 0 = Roman numeral I
-- Level 1 = Roman numeral II
-- Higher levels = Stronger effect
-- Shown in green text on the potion lore
-
-### Reading Potion Lore
-
-Master Potions display detailed information:
-
-```
-Speed V
-Master Potion
-Speed: +5 (Max: +7)
-Duration: 12m (Max: 30m)
-Speed Upgrade: 16 glowstone dust
-Duration Upgrade: 16 redstone dust
-```
-
-This tells you:
-- **Current level**: Speed V (power level 4)
-- **Current stats**: +5 speed, 12 minute duration
-- **Maximum possible**: +7 speed, 30 minute duration
-- **Next upgrade costs**: 16 glowstone for power, 16 redstone for duration
+When a stat shows "(MAX)", you've reached the highest level for that upgrade type.
 
 ## Using Master Potions
 
+Master Potions work differently from vanilla potions:
+
 ### Instant Activation
+- Right-click to instantly activate the potion
+- There is no drinking animation
+- The effect is applied immediately
+- This is faster than vanilla potions, which is useful in combat
 
-Master Potions activate instantly - no drinking animation!
+### Effect Tracking
+When you use a Master Potion, you'll see a message confirming:
+- The effect name and level
+- The duration
+- That the potion has been activated
 
-1. **Right-click** with the potion in your hand
-2. **Effect activates immediately**
-3. **Empty bottle** is returned to your inventory
+### Duration Warnings
+As your effect nears expiration, you'll receive warnings:
+- At 30 seconds remaining
+- At 10 seconds remaining
 
-### Effect Duration
+This gives you time to prepare another potion if needed.
 
-Master Potion effects are tracked and persist even if:
-- You log out and back in
-- The server restarts
-- Other plugins try to remove them
+## Special Effects
 
-You'll receive warnings when effects are about to expire:
-- **30 seconds remaining** - First warning
-- **10 seconds remaining** - Final warning
-
-### Multiple Effects
-
-You can have multiple different Master Potion effects active at once!
-- Each effect has its own timer
-- Effects refresh themselves automatically
-- Drinking the same potion type again refreshes that effect's duration
-
-## Special Potion Types
+MasterBrewing includes two custom effects not found in vanilla Minecraft:
 
 ### Fly Potion
-
-Fly potions grant **creative-style flight** in survival mode! 
-
-## How to obtain a Fly Potion
-
-Fly potions can be obtained in several ways:
-
-1. **Chests** - opening a chest can sometimes drop special loot including a Fly potion.  the higher your luck, the more likely it is and the more you get.
-2. **Fishing** - fishing can give you special loot including a Fly potion.  the higher your luck and Luck of the Sea, the more you likely it is and the more you get
-3. **Redeeming Keys** - Rewards keys are aquired via placing in a jobs event, monster combat, and your harvest hoe.  
-
-> **Note:** You cannot craft this potion. 
-
-**How it works:**
-- Enables flight like creative mode
-- Higher power levels = faster flight speed
-- Base speed: 100% (normal creative speed)
-- Max speed: Can reach 300%+ depending on configuration
-
-**Using Flight:**
-- Double-tap space to start flying
-- Space to go up, Shift to go down
-- Flight action bar shows remaining time and level
-
-**Important**: Flight automatically disables when the potion expires. Make sure you're on the ground!
+- Grants survival flight (like Creative mode, but temporary)
+- Flight speed increases with power level upgrades
+- The action bar (above your hotbar) shows remaining flight time
+- When the effect expires, you'll stop flying (be careful of fall damage!)
 
 ### Fortune Potion
+- Enhances your luck for better loot drops
+- Higher power levels mean even better luck
+- Works on mob drops and chest loot
 
-Fortune potions grant the **Luck effect** for better loot!
+## Effect Persistence
 
-## How to obtain a Fortune Potion
+One of the best features of Master Potions is that effects persist:
 
-Fortune potions can be obtained in several ways:
+### Logout/Login
+If you log out while an effect is active, it will be restored when you log back in. The timer continues while you're offline, so if you had 10 minutes left and return 5 minutes later, you'll have 5 minutes remaining.
 
-1. **Chests** - opening a chest can sometimes drop special loot including a Fortune potion.  the higher your luck, the more likely it is and the more you get.
-2. **Fishing** - fishing can give you special loot including a Fortune potion.  the higher your luck and Luck of the Sea, the more likely it is and the more you get
-3. **Redeeming Keys** - Rewards keys are aquired via placing in a jobs event, monster combat, and your harvest hoe.  
+### Server Restarts
+Effects also survive server restarts. Your active effects are saved and restored automatically.
 
-> **Note:** You cannot craft this potion. 
+## Virtual Brewing Stand
 
-**How it works:**
-- Increases luck stat for better drops
-- Affects fishing, mob drops, and chest loot
-- Higher power levels = more luck
-- Can reach extreme luck values (65+)
+If you have the `masterbrewing.use` permission, you can access a virtual Master Brewing Stand:
 
-**Best used for:**
-- Fishing rare items
-- Farming mob drops
-- Opening loot chests
-- Enchanting (better enchantments)
+### Opening the Virtual Stand
+- Type `/masterbrewing` with no arguments
+- A brewing interface opens without needing a physical block
 
-## Tips and Tricks
+### Features
+- Works exactly like a placed Master Brewing Stand
+- Contents are saved when you close it
+- Your saved items and fuel return when you open it again
+- Each player has their own virtual stand
 
-### Efficient Upgrading
+## Commands for Players
 
-1. **Upgrade multiple potions at once** - Put 3 potions in the brewing stand
-2. **All potions upgrade together** using the same cost
-3. **Save materials** by brewing in batches
+| Command | Description |
+|---------|-------------|
+| `/masterbrewing` | Opens your virtual Master Brewing Stand |
+| `/masterbrewing help` | Shows help information and upgrade tier tables |
 
-### Strategic Upgrades
+## Tips for Best Results
 
-- **Balance duration and power** based on your needs
-- Long duration + low power = cheap but effective
-- Short duration + high power = expensive but powerful
-- Max both = ultimate power, massive cost!
+1. **Plan Your Upgrades** - Check the lore on your potion to see upgrade costs before adding materials
 
-### Potion Management
+2. **Batch Brewing** - You can upgrade all three potion slots at once if they share the same effect type
 
-- **Check lore** before upgrading to see costs
-- **Plan ahead** - gather materials for multiple upgrades
-- **Store carefully** - Master Potions are valuable!
-- **Use at the right time** - Don't waste expensive high-level potions
+3. **Balance Duration vs Power** - Sometimes a longer-lasting weaker effect is better than a short powerful one
 
-### Breaking Master Brewing Stands
+4. **Watch Your Materials** - Higher upgrade levels require significantly more materials
 
-- **Contents are preserved** - all potions and fuel saved
-- **Pick up safely** - break with any tool
-- **Relocate freely** - place elsewhere with everything intact
+5. **Upgrade Incrementally** - You must upgrade one level at a time; you can't skip levels
 
-### Cost Comparison
+6. **Keep Fuel Ready** - Always have Blaze Powder in the fuel slot before adding ingredients
 
-| Time Level | Redstone Cost | Duration   |
-|------------|---------------|------------|
-| 1          | 1             | 6 minutes  |
-| 2          | 4             | 12 minutes |
-| 3          | 16            | 18 minutes |
-| 4          | 32            | 24 minutes |
-| 5          | 64            | 30 minutes |
+7. **Virtual Stand Convenience** - Use `/masterbrewing` when you're away from your base
 
-| Power Level | Glowstone Cost | Display |
-|-------------|----------------|---------|
-| 1           | 1              | II      |
-| 2           | 4              | III     |
-| 3           | 16             | IV      |
-| 4           | 32             | V       |
-| 5           | 64             | VI      |
+## Potion Effects Available
 
-*Note: Fortune and Flight potions may have different costs. Always check your server's configuration!*
+Master Brewing supports all standard Minecraft potion effects plus the custom Fly and Fortune effects. Some examples:
 
-### Common Questions
+- Speed, Slowness
+- Strength, Weakness
+- Regeneration, Poison
+- Fire Resistance, Water Breathing
+- Night Vision, Invisibility
+- Jump Boost (Leaping), Slow Falling
+- Haste, Mining Fatigue
+- Resistance, Health Boost
+- Absorption, Saturation
+- Luck, Unluck
+- Conduit Power, Dolphin's Grace
+- And many more!
 
-**Q: Can I upgrade splash or lingering potions?**
-A: Yes! Master Brewing works with all potion types.
+**Note:** Instant effects (Healing, Harming, Saturation) can only be upgraded with Glowstone for more power. They cannot be upgraded with Redstone since they have no duration.
 
-**Q: What happens if I don't have enough materials?**
-A: The brewing won't complete - nothing changes.
+## Summary
 
-**Q: Can I downgrade a potion?**
-A: No, upgrades are permanent.
-
-**Q: Do effects stack?**
-A: No - drinking the same effect again refreshes the timer at the new level.
-
-**Q: Can I use this on modded potions?**
-A: Only vanilla Minecraft potions are supported.
-
-**Q: What happens if my flight ends mid-air?**
-A: You'll start falling! Always land before it expires or have a backup (feather falling, slow falling, etc.)
-
-## Enjoy Your Master Potions!
-
-Now you're ready to create incredibly powerful potions! Remember:
-- Start with cheap upgrades to test
-- Plan your material gathering
-- Use potions strategically
-- Have fun with your new powers!
-
-Happy Brewing! ✨🧪
-
----
-
-**Made with ❤️ by SupaFloof Games, LLC**
+MasterBrewing transforms Minecraft's potion system into something much more powerful. With Master Potions, you can create effects that last for hours instead of minutes, and reach strength levels far beyond what vanilla brewing allows. Use your Master Brewing Stand wisely, and you'll have access to some of the most powerful buffs in the game!

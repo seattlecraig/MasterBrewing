@@ -10,6 +10,10 @@ commands:
     description: Master Brewing command
     usage: /masterbrewing <help|give|reload>
     aliases: [mb, mbrew]
+  effects:
+    description: Show all active potion effects
+    usage: /effects
+    aliases: [eff]
 
 permissions:
   masterbrewing.use:

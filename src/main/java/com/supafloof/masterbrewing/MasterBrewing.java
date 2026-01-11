@@ -635,6 +635,10 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         getCommand("masterbrewing").setExecutor(this);
         getCommand("masterbrewing").setTabCompleter(this);
         
+        // Register /effects command
+        getCommand("effects").setExecutor(this);
+        getCommand("effects").setTabCompleter(this);
+        
         // ===== STEP 5: Start background tasks =====
         // This task runs continuously to refresh active potion effects on players
         // Required because our effects bypass vanilla potion duration limits
@@ -3191,6 +3195,166 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
         }
     }
     
+    /**
+     * Formats duration for the /effects command display.
+     * 
+     * Format rules:
+     * - If duration >= 1 hour: HH:MM format (e.g., "01:30" for 1 hour 30 minutes)
+     * - If duration < 1 hour: MM:SS format (e.g., "05:30" for 5 minutes 30 seconds)
+     * 
+     * @param seconds Duration in seconds
+     * @return Formatted string in HH:MM or MM:SS format
+     */
+    private String formatEffectsTime(int seconds) {
+        int hours = seconds / 3600;
+        int minutes = (seconds % 3600) / 60;
+        int secs = seconds % 60;
+        
+        if (hours > 0) {
+            // HH:MM:SS format for durations >= 1 hour
+            return String.format("%02d:%02d:%02d", hours, minutes, secs);
+        } else {
+            // MM:SS format for durations < 1 hour
+            return String.format("%02d:%02d", minutes, secs);
+        }
+    }
+    
+    /**
+     * Handles the /effects command to display all active potion effects.
+     * 
+     * Displays a formatted list of all active potion effects on the player,
+     * including:
+     * - Effect name (properly formatted from snake_case to Title Case)
+     * - Power level in Roman numerals (amplifier 0 = I, 1 = II, etc.)
+     * - Time remaining (HH:MM if >= 1 hour, else MM:SS)
+     * 
+     * Special handling:
+     * - Infinite duration effects (from beacons, etc.) show "∞" for time
+     * - Custom effects like "fly" are handled from the master effects tracking
+     * 
+     * @param sender The command sender (must be a player)
+     * @return true if command was handled
+     */
+    private boolean handleEffectsCommand(CommandSender sender) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(Component.text("This command can only be used by players!", NamedTextColor.RED));
+            return true;
+        }
+        
+        Player player = (Player) sender;
+        Collection<PotionEffect> activeEffects = player.getActivePotionEffects();
+        
+        // Also check for custom master effects like fly
+        UUID uuid = player.getUniqueId();
+        List<ActiveMasterEffect> masterEffects = activeMasterEffects.get(uuid);
+        
+        // Build combined list of effects to display
+        List<EffectDisplayInfo> displayEffects = new ArrayList<>();
+        
+        // Add standard potion effects
+        for (PotionEffect effect : activeEffects) {
+            String effectName = formatEffectName(effect.getType());
+            int amplifier = effect.getAmplifier();
+            int durationTicks = effect.getDuration();
+            
+            // Check if this is a Master Effect with a longer actual duration
+            int actualDurationSeconds;
+            if (masterEffects != null) {
+                ActiveMasterEffect masterMatch = null;
+                String effectKey = effect.getType().getKey().getKey();
+                
+                // Check for fortune -> luck mapping
+                for (ActiveMasterEffect me : masterEffects) {
+                    String meKey = me.effectTypeKey;
+                    if (meKey.equals("fortune")) {
+                        meKey = "luck";
+                    }
+                    if (meKey.equals(effectKey)) {
+                        masterMatch = me;
+                        break;
+                    }
+                }
+                
+                if (masterMatch != null) {
+                    // Use master effect's actual remaining time
+                    long remaining = masterMatch.expiryTime - System.currentTimeMillis();
+                    actualDurationSeconds = (int) Math.max(0, remaining / 1000);
+                } else {
+                    // Not a master effect, use vanilla duration
+                    // Handle infinite duration (e.g., from beacons)
+                    if (durationTicks < 0 || durationTicks > 999999) {
+                        actualDurationSeconds = -1; // Mark as infinite
+                    } else {
+                        actualDurationSeconds = durationTicks / 20;
+                    }
+                }
+            } else {
+                // No master effects, use vanilla duration
+                if (durationTicks < 0 || durationTicks > 999999) {
+                    actualDurationSeconds = -1; // Mark as infinite
+                } else {
+                    actualDurationSeconds = durationTicks / 20;
+                }
+            }
+            
+            displayEffects.add(new EffectDisplayInfo(effectName, amplifier, actualDurationSeconds));
+        }
+        
+        // Add fly effect if active (it's not a vanilla potion effect)
+        if (masterEffects != null) {
+            for (ActiveMasterEffect me : masterEffects) {
+                if (me.effectTypeKey.equals("fly")) {
+                    long remaining = me.expiryTime - System.currentTimeMillis();
+                    int seconds = (int) Math.max(0, remaining / 1000);
+                    displayEffects.add(new EffectDisplayInfo("Fly", me.amplifier, seconds));
+                }
+            }
+        }
+        
+        // Display header
+        player.sendMessage(Component.text("-------------------", NamedTextColor.GRAY));
+        player.sendMessage(Component.text("Active Effects", NamedTextColor.GOLD, TextDecoration.BOLD));
+        player.sendMessage(Component.text("-------------------", NamedTextColor.GRAY));
+        
+        if (displayEffects.isEmpty()) {
+            player.sendMessage(Component.text("No active effects", NamedTextColor.GRAY));
+        } else {
+            // Sort by effect name for consistent display
+            displayEffects.sort((a, b) -> a.name.compareToIgnoreCase(b.name));
+            
+            for (EffectDisplayInfo info : displayEffects) {
+                String romanLevel = toRoman(info.amplifier + 1);
+                String timeStr;
+                if (info.durationSeconds < 0) {
+                    timeStr = "∞";
+                } else {
+                    timeStr = formatEffectsTime(info.durationSeconds);
+                }
+                
+                player.sendMessage(Component.text(info.name + " " + romanLevel, NamedTextColor.AQUA)
+                    .append(Component.text(" (" + timeStr + " remaining)", NamedTextColor.GRAY)));
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Helper class for storing effect display information.
+     * Used internally by handleEffectsCommand to collect and sort effects.
+     */
+    private static class EffectDisplayInfo {
+        String name;
+        int amplifier;
+        int durationSeconds;
+        
+        EffectDisplayInfo(String name, int amplifier, int durationSeconds) {
+            this.name = name;
+            this.amplifier = amplifier;
+            this.durationSeconds = durationSeconds;
+        }
+    }
+    
     // ==================================================================================
     // COMMANDS - /masterbrewing command handling
     // ==================================================================================
@@ -3212,6 +3376,12 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
      */
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        // Handle /effects command
+        if (command.getName().equalsIgnoreCase("effects")) {
+            return handleEffectsCommand(sender);
+        }
+        
+        // Handle /masterbrewing command
         if (args.length == 0) {
             // No args - open virtual master brewing stand if player has permission
             if (!(sender instanceof Player)) {
@@ -4461,6 +4631,11 @@ public class MasterBrewing extends JavaPlugin implements Listener, TabCompleter 
      */
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        // /effects has no arguments to complete
+        if (command.getName().equalsIgnoreCase("effects")) {
+            return new ArrayList<>();
+        }
+        
         List<String> completions = new ArrayList<>();
         
         if (args.length == 1) {
